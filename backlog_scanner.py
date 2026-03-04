@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """TODO Backlog Scanner - Scans codebases for TODO/FIXME/HACK/XXX comments."""
 
-from __future__ import annotations
-
 import argparse
 import fnmatch
 import json
 import re
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import date
+from enum import Enum
 from pathlib import Path
-from typing import Iterator, Optional
-
+from typing import Protocol
 
 # Regex pattern to detect TODO markers (case-insensitive)
 # Matches: TODO, FIXME, HACK, XXX (with optional colon)
@@ -26,6 +25,27 @@ JAVA_PACKAGE_RE = re.compile(r"^\s*package\s+([\w.]+)\s*;")
 # Matches GitHub-style (#123) or Jira-style (ABC-123) issue IDs
 ISSUE_ID_RE = re.compile(r"#\d+|[A-Z]+-\d+")
 
+class ScannerError(Exception):
+    """Base exception for backlog scanner errors."""
+
+
+class FileReadError(ScannerError):
+    """Raised when a file cannot be read due to an I/O failure."""
+
+
+class ConfigError(ScannerError):
+    """Raised for invalid CLI arguments or configuration."""
+
+
+class Marker(str, Enum):
+    """Recognized TODO marker types."""
+
+    TODO = "TODO"
+    FIXME = "FIXME"
+    HACK = "HACK"
+    XXX = "XXX"
+
+
 DEFAULT_EXCLUDES: list[str] = [
     "node_modules",
     "target",
@@ -36,15 +56,38 @@ DEFAULT_EXCLUDES: list[str] = [
 ]
 
 
-@dataclass
+IMPACT_KEYWORDS: list[tuple[re.Pattern[str], int]] = [
+    (re.compile(r"\bSECURITY\b|DATA\s+LOSS|\bP0\b|\bCRITICAL\b"), 5),
+    (re.compile(r"\bBUG\b|\bFIXME\b"), 4),
+    (re.compile(r"\bTODO\b"), 3),
+    (re.compile(r"\bREFACTOR\b|\bCLEANUP\b"), 2),
+    (re.compile(r"NICE\s+TO\s+HAVE"), 1),
+]
+
+EFFORT_SHORT: int = 50
+EFFORT_LONG: int = 150
+
+MIN_PRIORITY: int = 1
+MAX_PRIORITY: int = 10
+
+
+@dataclass(slots=True, frozen=True)
 class TodoItem:
     """Represents a single TODO/FIXME/HACK/XXX comment found in a file."""
 
-    marker: str
+    marker: Marker
     text: str
     file_path: Path
     line_number: int
     raw_line: str
+
+    def __post_init__(self) -> None:
+        """Validate TodoItem fields on creation."""
+        if self.line_number <= 0:
+            raise ValueError(f"line_number must be > 0, got {self.line_number}")
+        if not isinstance(self.marker, Marker):
+            msg = f"Invalid marker {self.marker!r}; must be a Marker enum value"
+            raise ValueError(msg)
 
     @property
     def normalized_text(self) -> str:
@@ -54,15 +97,15 @@ class TodoItem:
     @property
     def full_text(self) -> str:
         """Full marker + text representation."""
-        return f"{self.marker.upper()}: {self.text.strip()}"
+        return f"{self.marker.value}: {self.text.strip()}"
 
     @property
     def priority(self) -> int:
-        """Priority score (1-10): impact + confidence_boost - effort, clamped to 1-10."""
+        """Compute priority score (1-10): impact + confidence_boost - effort."""
         return priority_score(self)
 
 
-@dataclass
+@dataclass(slots=True)
 class ScanResult:
     """Result of a repository scan."""
 
@@ -73,14 +116,14 @@ class ScanResult:
 
     @property
     def total(self) -> int:
+        """Total number of TODO items in the scan result."""
         return len(self.items)
 
-    def by_marker(self) -> dict[str, list[TodoItem]]:
+    def by_marker(self) -> dict[Marker, list[TodoItem]]:
         """Group items by marker type."""
-        result: dict[str, list[TodoItem]] = {}
+        result: dict[Marker, list[TodoItem]] = {}
         for item in self.items:
-            key = item.marker.upper()
-            result.setdefault(key, []).append(item)
+            result.setdefault(item.marker, []).append(item)
         return result
 
     def by_module(self, root: Path) -> dict[str, list[TodoItem]]:
@@ -92,13 +135,13 @@ class ScanResult:
         return clusters
 
     def deduplicate(self) -> None:
-        """Deduplicate items by normalized text, keeping first occurrence by file path (alphabetical)."""
+        """Deduplicate by (marker, normalized_text), keeping first occurrence."""
         # Sort by file path so the first alphabetical occurrence is kept
         self.items.sort(key=lambda item: str(item.file_path))
-        seen: set[tuple[str, str]] = set()
+        seen: set[tuple[Marker, str]] = set()
         unique: list[TodoItem] = []
         for item in self.items:
-            key = (item.marker.upper(), item.normalized_text)
+            key = (item.marker, item.normalized_text)
             if key not in seen:
                 seen.add(key)
                 unique.append(item)
@@ -108,27 +151,20 @@ class ScanResult:
 
 
 def _impact_score(item: TodoItem) -> int:
-    """Return impact score (1-5) based on marker and text keywords (highest match wins)."""
-    combined = f"{item.marker} {item.text}".upper()
-    if re.search(r"\bSECURITY\b|DATA\s+LOSS|\bP0\b|\bCRITICAL\b", combined):
-        return 5
-    if re.search(r"\bBUG\b|\bFIXME\b", combined):
-        return 4
-    if re.search(r"\bTODO\b", combined):
-        return 3
-    if re.search(r"\bREFACTOR\b|\bCLEANUP\b", combined):
-        return 2
-    if re.search(r"NICE\s+TO\s+HAVE", combined):
-        return 1
+    """Return impact score (1-5); highest-priority keyword match wins."""
+    combined = f"{item.marker.value} {item.text}".upper()
+    for pattern, score in IMPACT_KEYWORDS:
+        if pattern.search(combined):
+            return score
     return 3  # default: TODO level
 
 
 def _effort_score(item: TodoItem) -> int:
     """Return effort score (1-3) based on normalized text length."""
     length = len(item.normalized_text)
-    if length < 50:
+    if length < EFFORT_SHORT:
         return 1
-    if length <= 150:
+    if length <= EFFORT_LONG:
         return 2
     return 3
 
@@ -141,12 +177,20 @@ def _confidence_boost(item: TodoItem) -> int:
 def priority_score(item: TodoItem) -> int:
     """Calculate priority score = impact + confidence_boost - effort, clamped 1-10."""
     score = _impact_score(item) + _confidence_boost(item) - _effort_score(item)
-    return max(1, min(10, score))
+    return max(MIN_PRIORITY, min(MAX_PRIORITY, score))
 
 
-def _detect_python_module(file_path: Path, root: Path) -> Optional[str]:
+class ModuleDetector(Protocol):
+    """Callable protocol for module/package detection from a source file."""
+
+    def __call__(self, file_path: Path, root: Path) -> str | None:
+        """Detect module name for file_path relative to root, or None."""
+        ...
+
+
+def _detect_python_module(file_path: Path, root: Path) -> str | None:
     """Find the top-level Python package containing this file (via __init__.py)."""
-    top_pkg: Optional[Path] = None
+    top_pkg: Path | None = None
     current = file_path.parent
     while current != root:
         if current.parent == current:
@@ -163,7 +207,7 @@ def _detect_python_module(file_path: Path, root: Path) -> Optional[str]:
         return None
 
 
-def _detect_js_module(file_path: Path, root: Path) -> Optional[str]:
+def _detect_js_module(file_path: Path, root: Path) -> str | None:
     """Find the nearest package.json for a JS/TS file and return its name."""
     current = file_path.parent
     while current != root:
@@ -185,7 +229,7 @@ def _detect_js_module(file_path: Path, root: Path) -> Optional[str]:
     return None
 
 
-def _detect_java_module(file_path: Path) -> Optional[str]:
+def _detect_java_module(file_path: Path, root: Path) -> str | None:  # noqa: ARG001
     """Extract Java package declaration from file."""
     try:
         with file_path.open(encoding="utf-8", errors="ignore") as f:
@@ -196,19 +240,28 @@ def _detect_java_module(file_path: Path) -> Optional[str]:
                 if m:
                     return m.group(1)
     except OSError:
-        pass
+        return None
     return None
+
+
+_DETECTOR_REGISTRY: dict[str, ModuleDetector] = {
+    ".py": _detect_python_module,
+    ".js": _detect_js_module,
+    ".ts": _detect_js_module,
+    ".jsx": _detect_js_module,
+    ".tsx": _detect_js_module,
+    ".mjs": _detect_js_module,
+    ".cjs": _detect_js_module,
+    ".java": _detect_java_module,
+}
 
 
 def detect_module(file_path: Path, root: Path) -> str:
     """
     Detect the module/package cluster name for a file.
 
-    Detection by file type:
-    - .py  : top-level Python package (via __init__.py), else fallback
-    - .js/.ts/.jsx/.tsx/.mjs/.cjs: nearest package.json name, else fallback
-    - .java: package declaration in file, else fallback
-    - Fallback: top-level directory under root, or "(root)" if file is at root level
+    Dispatches to a registered `ModuleDetector` by file extension. Fallback:
+    top-level directory under root, or "(root)" if file is at root level.
     """
     try:
         relative = file_path.relative_to(root)
@@ -220,20 +273,14 @@ def detect_module(file_path: Path, root: Path) -> str:
         return "(root)"
 
     ext = file_path.suffix.lower()
-    module: Optional[str] = None
-
-    if ext == ".py":
-        module = _detect_python_module(file_path, root)
-    elif ext in {".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"}:
-        module = _detect_js_module(file_path, root)
-    elif ext == ".java":
-        module = _detect_java_module(file_path)
+    detector = _DETECTOR_REGISTRY.get(ext)
+    module: str | None = detector(file_path, root) if detector is not None else None
 
     return module if module is not None else parts[0]
 
 
 def is_excluded(path: Path, root: Path, excludes: list[str]) -> bool:
-    """Return True if path is under an excluded directory or matches an exclude pattern."""
+    """Return True if any part of path matches an exclude pattern."""
     try:
         relative = path.relative_to(root)
     except ValueError:
@@ -257,7 +304,9 @@ def matches_include(path: Path, root: Path, includes: list[str]) -> bool:
 
     relative_str = str(relative).replace("\\", "/")
     for pattern in includes:
-        if fnmatch.fnmatch(relative_str, pattern) or fnmatch.fnmatch(path.name, pattern):
+        if fnmatch.fnmatch(relative_str, pattern) or fnmatch.fnmatch(
+            path.name, pattern
+        ):
             return True
     return False
 
@@ -278,30 +327,26 @@ def iter_files(
         yield path
 
 
-def scan_file(file_path: Path, root: Path) -> tuple[list[TodoItem], bool]:
+def scan_file(file_path: Path, root: Path) -> Iterator[TodoItem]:
     """
-    Scan a single file for TODO markers.
+    Scan a single file for TODO markers, yielding items lazily.
 
-    Returns (items, success). success=False if file could not be read.
+    Raises FileReadError if the file cannot be read.
     """
-    items: list[TodoItem] = []
     try:
         with file_path.open(encoding="utf-8", errors="ignore") as f:
             for line_number, line in enumerate(f, start=1):
                 match = TODO_PATTERN.search(line)
                 if match:
-                    items.append(
-                        TodoItem(
-                            marker=match.group("marker"),
-                            text=match.group("text").strip(),
-                            file_path=file_path,
-                            line_number=line_number,
-                            raw_line=line.rstrip(),
-                        )
+                    yield TodoItem(
+                        marker=Marker(match.group("marker").upper()),
+                        text=match.group("text").strip(),
+                        file_path=file_path,
+                        line_number=line_number,
+                        raw_line=line.rstrip(),
                     )
-    except OSError:
-        return [], False
-    return items, True
+    except OSError as e:
+        raise FileReadError(f"Cannot read file: {file_path}") from e
 
 
 def scan_repository(
@@ -314,15 +359,22 @@ def scan_repository(
     result = ScanResult()
 
     for file_path in iter_files(root, includes, excludes):
-        items, success = scan_file(file_path, root)
-        if success:
+        try:
+            rel_display = ""
+            if verbose:
+                try:
+                    rel_display = str(file_path.relative_to(root)).replace("\\", "/")
+                except ValueError:
+                    rel_display = str(file_path)
+            for item in scan_file(file_path, root):
+                result.items.append(item)
+                if verbose:
+                    print(
+                        f"  [{item.marker.value}] {rel_display}:{item.line_number}"
+                        f" - {item.text}"
+                    )
             result.files_scanned += 1
-            result.items.extend(items)
-            if verbose and items:
-                for item in items:
-                    rel = file_path.relative_to(root)
-                    print(f"  [{item.marker.upper()}] {rel}:{item.line_number} - {item.text}")
-        else:
+        except FileReadError:
             result.files_skipped += 1
 
     result.deduplicate()
@@ -340,10 +392,10 @@ def print_summary(result: ScanResult, root: Path) -> None:
     by_marker = result.by_marker()
     if by_marker:
         print("\n  Breakdown by marker:")
-        for marker in ["TODO", "FIXME", "HACK", "XXX"]:
+        for marker in Marker:
             count = len(by_marker.get(marker, []))
             if count:
-                print(f"    {marker:8}: {count}")
+                print(f"    {marker.value:8}: {count}")
 
     clusters = result.by_module(root)
     if clusters:
@@ -352,35 +404,34 @@ def print_summary(result: ScanResult, root: Path) -> None:
             print(f"    {module_name}: {len(module_items)}")
 
 
-def generate_backlog_md(result: ScanResult, root: Path) -> str:
-    """Generate BACKLOG.md content as a string."""
-    lines: list[str] = []
-    lines.append("# TODO Backlog")
-    lines.append("")
-    lines.append(f"Generated: {date.today().isoformat()}")
-    lines.append("")
+def _backlog_lines(result: ScanResult, root: Path) -> Iterator[str]:
+    """Yield BACKLOG.md lines lazily."""
+    yield "# TODO Backlog"
+    yield ""
+    yield f"Generated: {date.today().isoformat()}"
+    yield ""
 
     # Summary section
-    lines.append("## Summary")
-    lines.append("")
-    lines.append(f"- **Total**: {result.total} items")
-    lines.append(f"- **Duplicates removed**: {result.duplicates_removed}")
-    lines.append(f"- **Files scanned**: {result.files_scanned}")
-    lines.append("")
+    yield "## Summary"
+    yield ""
+    yield f"- **Total**: {result.total} items"
+    yield f"- **Duplicates removed**: {result.duplicates_removed}"
+    yield f"- **Files scanned**: {result.files_scanned}"
+    yield ""
 
     by_marker = result.by_marker()
-    lines.append("### By Marker Type")
-    lines.append("")
-    lines.append("| Marker | Count |")
-    lines.append("|--------|-------|")
-    for marker in ["TODO", "FIXME", "HACK", "XXX"]:
+    yield "### By Marker Type"
+    yield ""
+    yield "| Marker | Count |"
+    yield "|--------|-------|"
+    for marker in Marker:
         count = len(by_marker.get(marker, []))
-        lines.append(f"| {marker:<6} | {count:<5} |")
-    lines.append("")
+        yield f"| {marker.value:<6} | {count:<5} |"
+    yield ""
 
     # Top 10 highest priority items
-    lines.append("## Top 10 Highest Priority Items")
-    lines.append("")
+    yield "## Top 10 Highest Priority Items"
+    yield ""
     sorted_items = sorted(result.items, key=lambda x: x.priority, reverse=True)
     for rank, item in enumerate(sorted_items[:10], start=1):
         try:
@@ -390,23 +441,25 @@ def generate_backlog_md(result: ScanResult, root: Path) -> str:
         rel_str = str(rel_path).replace("\\", "/")
         issue_match = ISSUE_ID_RE.search(item.text)
         issue_suffix = f" ({issue_match.group()})" if issue_match else ""
-        lines.append(
-            f"### {rank}. [Score: {item.priority}] {item.marker.upper()} — `{rel_str}:{item.line_number}`"
+        heading = (
+            f"### {rank}. [Score: {item.priority}] {item.marker.value}"
+            f" — `{rel_str}:{item.line_number}`"
         )
-        lines.append("")
-        lines.append(f"> {item.normalized_text}{issue_suffix}")
-        lines.append("")
-        lines.append("---")
-        lines.append("")
+        yield heading
+        yield ""
+        yield f"> {item.normalized_text}{issue_suffix}"
+        yield ""
+        yield "---"
+        yield ""
 
     # By module section
-    lines.append("## By Module")
-    lines.append("")
+    yield "## By Module"
+    yield ""
     clusters = result.by_module(root)
     for module_name, module_items in sorted(clusters.items()):
         count = len(module_items)
-        lines.append(f"### {module_name} ({count} item{'s' if count != 1 else ''})")
-        lines.append("")
+        yield f"### {module_name} ({count} item{'s' if count != 1 else ''})"
+        yield ""
         for item in sorted(module_items, key=lambda x: x.priority, reverse=True):
             try:
                 item_rel: Path = item.file_path.relative_to(root)
@@ -415,20 +468,27 @@ def generate_backlog_md(result: ScanResult, root: Path) -> str:
             item_rel_str = str(item_rel).replace("\\", "/")
             m = ISSUE_ID_RE.search(item.text)
             item_issue = f" ({m.group()})" if m else ""
-            lines.append(
-                f"- **[{item.priority}]** `{item.marker.upper()}` "
-                f"`{item_rel_str}:{item.line_number}` — {item.normalized_text}{item_issue}"
+            loc = f"`{item_rel_str}:{item.line_number}`"
+            yield (
+                f"- **[{item.priority}]** `{item.marker.value}` "
+                f"{loc} — {item.normalized_text}{item_issue}"
             )
-        lines.append("")
+        yield ""
 
-    return "\n".join(lines)
+
+def generate_backlog_md(result: ScanResult, root: Path) -> str:
+    """Generate BACKLOG.md content as a string."""
+    return "\n".join(_backlog_lines(result, root))
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(
         prog="backlog_scanner",
-        description="Scan a codebase for TODO/FIXME/HACK/XXX comments and generate a prioritized backlog.",
+        description=(
+            "Scan a codebase for TODO/FIXME/HACK/XXX comments"
+            " and generate a prioritized backlog."
+        ),
     )
     parser.add_argument(
         "--root",
@@ -443,7 +503,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         metavar="PATTERN",
-        help="File patterns to include (default: **/*). Can be specified multiple times.",
+        help=(
+            "File patterns to include (default: **/*). "
+            "Can be specified multiple times."
+        ),
     )
     parser.add_argument(
         "--exclude",
@@ -466,17 +529,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def resolve_args(args: argparse.Namespace) -> tuple[Path, list[str], list[str]]:
-    """Validate and resolve CLI arguments."""
+    """Validate and resolve CLI arguments.
+
+    Raises ConfigError if the root path is invalid.
+    """
     root = args.root.resolve()
     if not root.exists():
-        print(f"Error: root path does not exist: {root}", file=sys.stderr)
-        sys.exit(1)
+        raise ConfigError(f"root path does not exist: {root}")
     if not root.is_dir():
-        print(f"Error: root path is not a directory: {root}", file=sys.stderr)
-        sys.exit(1)
+        raise ConfigError(f"root path is not a directory: {root}")
 
     includes: list[str] = args.includes if args.includes is not None else ["**/*"]
-    excludes: list[str] = args.excludes if args.excludes is not None else list(DEFAULT_EXCLUDES)
+    excludes: list[str] = (
+        args.excludes if args.excludes is not None else list(DEFAULT_EXCLUDES)
+    )
 
     return root, includes, excludes
 
@@ -496,13 +562,14 @@ def verify_completeness(
         print(f"✓ Verified: captured {original_count} items")
         return 0
     print(
-        f"✗ Verification failed: original scan={original_count}, re-scan={verification.total}",
+        f"✗ Verification failed: original scan={original_count},"
+        f" re-scan={verification.total}",
         file=sys.stderr,
     )
     return 1
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Entry point for the backlog scanner CLI."""
     # Ensure UTF-8 output so Unicode characters (e.g. ✓) work on all platforms
     if hasattr(sys.stdout, "reconfigure"):
@@ -513,7 +580,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    root, includes, excludes = resolve_args(args)
+    try:
+        root, includes, excludes = resolve_args(args)
+    except ScannerError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
     # Always exclude the generated BACKLOG.md so it doesn't pollute scans
     if "BACKLOG.md" not in excludes:

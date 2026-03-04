@@ -1,11 +1,16 @@
 ## Codebase Patterns
+- `Marker(str, Enum)` is used for marker types; `TodoItem.marker` is typed `Marker`; convert regex matches with `Marker(match.group("marker").upper())`
+- Use `marker.value` (not `marker.upper()`) to get the string value from a `Marker` enum
+- `by_marker()` returns `dict[Marker, list[TodoItem]]`; iterate with `for marker in Marker:` for guaranteed ordering
 - Python 3.13 is available; use `python` (not `python3`) to run scripts
 - Use `python -m mypy backlog_scanner.py --strict` for typechecking (mypy must be installed via pip)
 - All path handling uses `pathlib.Path` for cross-platform compatibility
 - File reading uses `encoding="utf-8", errors="ignore"` to handle decode errors gracefully
 - TODO marker regex: `r"(?P<marker>TODO|FIXME|HACK|XXX):?\s*(?P<text>.*)"` with `re.IGNORECASE`
 - Exclude matching: check each part of the relative path against exclude patterns using `fnmatch`
-- Module detection: `detect_module(file_path, root)` returns cluster name; uses `_detect_python_module`, `_detect_js_module`, `_detect_java_module` helpers; fallback is `parts[0]` (top-level dir) or `"(root)"`
+- Module detection: `detect_module(file_path, root)` dispatches via `_DETECTOR_REGISTRY: dict[str, ModuleDetector]` keyed by file extension; fallback is `parts[0]` (top-level dir) or `"(root)"`
+- `ModuleDetector` Protocol has `__call__(self, file_path: Path, root: Path) -> str | None`; plain functions with matching signatures satisfy it automatically
+- All language detectors now share signature `(file_path: Path, root: Path) -> str | None` — `_detect_java_module` accepts `root` but does not use it (protocol compliance)
 - `ScanResult.by_module(root)` groups items by module name; requires `root: Path` argument`
 - BACKLOG.md is always excluded from scans (added to excludes in `main()` if not already present)
 - Always call `sys.stdout.reconfigure(encoding="utf-8")` and `sys.stderr.reconfigure(encoding="utf-8")` at start of `main()` for Unicode output on Windows (cp1252 can't print ✓)
@@ -97,7 +102,7 @@ Started: Tue, Mar  3, 2026 10:34:39 PM
   - BACKLOG.md is NOT excluded from subsequent scans; tasks/ and __pycache__ dirs picked up — consider adding to exclude list if noise is a concern
 ---
 
-## 2026-03-03 - US-006
+## 2026-03-03 - US-006 (ralph/refactor-python-patterns branch)
 - Added `verify_completeness(original_count, root, includes, excludes)` function that re-scans and compares item counts
 - Added UTF-8 stdout/stderr reconfiguration at start of `main()` to support Unicode output (✓) on Windows
 - Added BACKLOG.md to excludes in `main()` so the generated file never pollutes any scan
@@ -108,4 +113,140 @@ Started: Tue, Mar  3, 2026 10:34:39 PM
   - Windows terminal uses cp1252 by default; Unicode chars like ✓ require `sys.stdout.reconfigure(encoding="utf-8")` before any print calls
   - BACKLOG.md contains the TODO marker text (e.g. `TODO`) in markdown formatting, so it WOULD be picked up by the scanner — always exclude it
   - `verify_completeness` does a full `scan_repository()` call (with deduplication) — counts only match when using identical excludes list
+---
+
+## 2026-03-03 - US-001 (ralph/refactor-python-patterns branch)
+- Removed `from __future__ import annotations` (not needed in Python 3.13)
+- Replaced `from typing import Iterator, Optional` with `from collections.abc import Iterator`
+- Replaced all `Optional[X]` with `X | None` throughout the file (5 occurrences)
+- Files changed: `backlog_scanner.py`, `prd.json` (US-001 passes=true)
+- mypy --python-version 3.13 passes with zero issues
+- **Learnings for future iterations:**
+  - `from __future__ import annotations` is redundant in Python 3.13; remove it
+  - `collections.abc.Iterator` replaces `typing.Iterator` for Python 3.9+
+  - PEP 604 union syntax (`X | None`) works natively in Python 3.10+ at runtime
+  - The code already used lowercase `list[str]`, `dict[str, ...]` generics — no List/Dict/Tuple replacements needed
+---
+
+## 2026-03-03 - US-002 (ralph/refactor-python-patterns branch)
+- Added `ScannerError` base exception class, `FileReadError(ScannerError)`, `ConfigError(ScannerError)`
+- Changed `scan_file` signature from `tuple[list[TodoItem], bool]` to `list[TodoItem]`; raises `FileReadError` from OSError
+- Updated `scan_repository` to catch `FileReadError` and increment `files_skipped`
+- Updated `_detect_java_module` to raise `FileReadError` from OSError (with chaining)
+- Updated `detect_module` to catch `FileReadError` from `_detect_java_module` and fall back to None
+- Updated `resolve_args` to raise `ConfigError` instead of calling `sys.exit`
+- Updated `main()` to catch `ScannerError`, print error to stderr, return 1
+- Files changed: `backlog_scanner.py`, `prd.json` (US-002 passes=true), `BACKLOG.md` (regenerated)
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - `scan_file` now returns `list[TodoItem]` (not a tuple); callers use try/except FileReadError
+  - `_detect_js_module` still swallows OSError internally (intentional: continues directory walk on unreadable package.json)
+  - `resolve_args` raises `ConfigError`; `main()` must catch it — no more `sys.exit` inside helpers
+  - Exception chaining (`raise X from e`) preserves the original traceback for debugging
+---
+
+## 2026-03-03 - US-003 (ralph/refactor-python-patterns branch)
+- Wrapped `file_path.relative_to(root)` in `scan_repository` verbose path with try/except ValueError
+- All other `relative_to()` calls already used EAFP (try/except ValueError) from prior stories
+- File reading already uses EAFP with specific exception types (FileReadError raised from OSError)
+- Exception chaining already in place throughout (scan_file, _detect_java_module)
+- No bare `except: pass` exists; `_detect_js_module` named catches are intentional for walk continuity
+- Files changed: `backlog_scanner.py`, `prd.json` (US-003 passes=true)
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - US-001 and US-002 already applied most EAFP patterns; US-003 only needed the verbose-path `relative_to()` fix
+  - In scan_repository verbose path, `iter_files` guarantees files are under root but EAFP still applies
+  - `except (SpecificType): pass` inside a while loop body is NOT a bare except — it intentionally continues the loop
+---
+
+## 2026-03-03 - US-005 (ralph/refactor-python-patterns branch)
+- Changed `scan_file` from list-building to generator (yields `TodoItem` lazily with `yield`)
+- Updated `scan_repository` to consume `scan_file` generator inline: appends items one-by-one, prints verbose output as items arrive
+- Added `_backlog_lines(result, root) -> Iterator[str]` private generator that yields all BACKLOG.md lines lazily
+- Refactored `generate_backlog_md` to a one-liner: `return "\n".join(_backlog_lines(result, root))`
+- Files changed: `backlog_scanner.py`, `BACKLOG.md` (regenerated), `prd.json` (US-005 passes=true)
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - `scan_file` is now a generator — calling it returns a generator object immediately (no I/O yet); first iteration triggers `open()`
+  - `try/except OSError` inside a generator body works correctly; `FileReadError` propagates to the consumer's except clause
+  - `_backlog_lines` is private (underscore prefix); `generate_backlog_md` is the public API
+  - String building via generator + `"\n".join()` avoids both `+=` in loops and intermediate list allocation
+---
+
+## 2026-03-03 - US-004 (ralph/refactor-python-patterns branch)
+- Added `VALID_MARKERS: frozenset[str]` module-level constant for marker validation
+- Added `slots=True, frozen=True` to `TodoItem` dataclass
+- Added `__post_init__` to `TodoItem` validating `line_number > 0` and `marker.upper() in VALID_MARKERS`
+- Added `slots=True` to `ScanResult` dataclass (mutable, so no `frozen=True`)
+- Files changed: `backlog_scanner.py`, `prd.json` (US-004 passes=true), `BACKLOG.md` (regenerated)
+- mypy --strict passes with zero issues; scanner runs correctly
+- **Learnings for future iterations:**
+  - `frozen=True` on `TodoItem` makes it hashable and immutable; `__post_init__` can read but not set attributes
+  - `slots=True` on mutable `ScanResult` is fine: reassigning slot fields (e.g. `self.items = unique`) is allowed
+  - `VALID_MARKERS` as a `frozenset[str]` is reusable for future enum migration (US-006)
+  - Properties (`normalized_text`, `full_text`, `priority`) still work normally on `frozen=True, slots=True` dataclasses
+---
+
+## 2026-03-03 - US-006 (ralph/refactor-python-patterns branch)
+- Added `Marker(str, Enum)` with `TODO`, `FIXME`, `HACK`, `XXX` values
+- Removed `VALID_MARKERS` frozenset; replaced with `Marker` enum throughout
+- Changed `TodoItem.marker` type from `str` to `Marker`; `__post_init__` uses `isinstance(self.marker, Marker)`
+- Added `IMPACT_KEYWORDS: list[tuple[re.Pattern[str], int]]` — compiled regex patterns mapped to scores
+- Added `EFFORT_SHORT = 50`, `EFFORT_LONG = 150`, `MIN_PRIORITY = 1`, `MAX_PRIORITY = 10` named constants
+- Refactored `_impact_score` to loop over `IMPACT_KEYWORDS` instead of inline `re.search` calls
+- Updated `_effort_score` and `priority_score` to use named constants
+- `scan_file` converts regex match to `Marker(match.group("marker").upper())`
+- `by_marker()` now returns `dict[Marker, list[TodoItem]]`; all callers iterate `for marker in Marker:`
+- All `item.marker.upper()` usages replaced with `item.marker.value`
+- Files changed: `backlog_scanner.py`, `BACKLOG.md` (regenerated), `prd.json` (US-006 passes=true), `progress.txt`
+- mypy --strict passes with zero issues; scanner runs correctly (24 items, verified)
+- **Learnings for future iterations:**
+  - `Marker(str, Enum)` allows `Marker.TODO == "TODO"` to be True (hash-compatible with str), but dict keys are `Marker` type
+  - `match.group("marker").upper()` is needed before `Marker(...)` since regex is case-insensitive
+  - `for marker in Marker:` iterates in definition order (TODO, FIXME, HACK, XXX) — stable ordering guaranteed
+  - Removing `VALID_MARKERS` is safe once `Marker` enum exists; `__post_init__` uses `isinstance` check instead
+---
+
+## 2026-03-03 - US-007 (ralph/refactor-python-patterns branch)
+- Added `ModuleDetector(Protocol)` with `__call__(self, file_path: Path, root: Path) -> str | None`
+- Updated `_detect_java_module` signature to `(file_path: Path, root: Path) -> str | None`; now catches `OSError` internally and returns `None` (no longer raises `FileReadError`)
+- Added `_DETECTOR_REGISTRY: dict[str, ModuleDetector]` mapping each extension to its detector function
+- Refactored `detect_module` to look up the registry with `.get(ext)` instead of if/elif chain
+- Files changed: `backlog_scanner.py`, `BACKLOG.md` (regenerated), `prd.json` (US-007 passes=true), `progress.txt`
+- mypy --strict passes with zero issues; scanner runs correctly (24 items, verified)
+- **Learnings for future iterations:**
+  - `Protocol` with `__call__` makes plain functions satisfy the protocol automatically — no wrapper classes needed
+  - `_detect_java_module` accepts `root` for protocol conformance but doesn't use it; `# noqa: ARG001` comment documents this is intentional
+  - `_DETECTOR_REGISTRY` makes adding new language detectors trivial: just add a function + extend the dict
+  - `_detect_java_module` no longer raises `FileReadError`; it returns `None` on OSError — callers no longer need try/except around it
+---
+
+## 2026-03-04 - US-009 (ralph/refactor-python-patterns branch)
+- Fixed import sorting: ruff auto-fixed I001 (split `import X` and `from X import Y` blocks)
+- Added docstring to `ScanResult.total` property (was missing)
+- Fixed all E501 (line > 88 chars): shortened docstrings, broke long f-strings, wrapped long expressions
+- All criteria confirmed: no mutable defaults, `is None`/`is not None` used throughout, `isinstance()` used for all type checks
+- Files changed: `backlog_scanner.py`, `prd.json` (US-009 passes=true), `progress.txt`
+- ruff (E, F, I, N, W rules) and mypy --strict pass with zero issues
+- **Learnings for future iterations:**
+  - `ruff check --select I --fix` auto-fixes import sorting in one step
+  - E501 docstrings: simply shorten the text or use multiline `"""\nlong text\n"""`
+  - Long f-strings inside yields: extract to a named variable first, then yield it
+  - Long argparse `description=` and `help=`: wrap in parentheses with string concatenation
+---
+
+## 2026-03-03 - US-008 (ralph/refactor-python-patterns branch)
+- Created `pyproject.toml` with full tooling configuration
+- Project metadata: name=todo-backlog-scanner, version=0.1.0, requires-python>=3.13
+- `[tool.black]`: line-length=88, target-version=["py313"]
+- `[tool.ruff]` + `[tool.ruff.lint]`: select=["E","F","I","N","W"]
+- `[tool.mypy]`: python_version="3.13", warn_return_any=true, disallow_untyped_defs=true
+- `[tool.pytest.ini_options]`: testpaths=["tests"], addopts with --cov flags
+- Dev dependencies via `[dependency-groups]` dev: pytest, pytest-cov, black, ruff, mypy
+- Files changed: `pyproject.toml` (new), `prd.json` (US-008 passes=true), `progress.txt`
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - `[dependency-groups]` is the PEP 735 standard for dev deps in pyproject.toml (Python 3.13 era); avoids `[project.optional-dependencies]`
+  - `[tool.ruff.lint]` is a separate subsection from `[tool.ruff]` for lint-specific config
+  - `[project.scripts]` entry point maps CLI name to `module:function`
 ---

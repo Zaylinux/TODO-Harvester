@@ -1,0 +1,36 @@
+[project]
+name = "todo-backlog-scanner"
+version = "0.1.0"
+description = "Scans codebases for TODO/FIXME/HACK/XXX comments and generates a prioritised backlog"
+requires-python = ">=3.13"
+
+[project.scripts]
+backlog-scanner = "backlog_scanner:main"
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.mypy]
+python_version = "3.13"
+warn_return_any = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=backlog_scanner --cov-report=term-missing"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "black>=24.0",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
