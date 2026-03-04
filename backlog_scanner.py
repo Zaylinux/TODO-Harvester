@@ -9,6 +9,7 @@ import json
 import re
 import sys
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -351,6 +352,78 @@ def print_summary(result: ScanResult, root: Path) -> None:
             print(f"    {module_name}: {len(module_items)}")
 
 
+def generate_backlog_md(result: ScanResult, root: Path) -> str:
+    """Generate BACKLOG.md content as a string."""
+    lines: list[str] = []
+    lines.append("# TODO Backlog")
+    lines.append("")
+    lines.append(f"Generated: {date.today().isoformat()}")
+    lines.append("")
+
+    # Summary section
+    lines.append("## Summary")
+    lines.append("")
+    lines.append(f"- **Total**: {result.total} items")
+    lines.append(f"- **Duplicates removed**: {result.duplicates_removed}")
+    lines.append(f"- **Files scanned**: {result.files_scanned}")
+    lines.append("")
+
+    by_marker = result.by_marker()
+    lines.append("### By Marker Type")
+    lines.append("")
+    lines.append("| Marker | Count |")
+    lines.append("|--------|-------|")
+    for marker in ["TODO", "FIXME", "HACK", "XXX"]:
+        count = len(by_marker.get(marker, []))
+        lines.append(f"| {marker:<6} | {count:<5} |")
+    lines.append("")
+
+    # Top 10 highest priority items
+    lines.append("## Top 10 Highest Priority Items")
+    lines.append("")
+    sorted_items = sorted(result.items, key=lambda x: x.priority, reverse=True)
+    for rank, item in enumerate(sorted_items[:10], start=1):
+        try:
+            rel_path: Path = item.file_path.relative_to(root)
+        except ValueError:
+            rel_path = item.file_path
+        rel_str = str(rel_path).replace("\\", "/")
+        issue_match = ISSUE_ID_RE.search(item.text)
+        issue_suffix = f" ({issue_match.group()})" if issue_match else ""
+        lines.append(
+            f"### {rank}. [Score: {item.priority}] {item.marker.upper()} — `{rel_str}:{item.line_number}`"
+        )
+        lines.append("")
+        lines.append(f"> {item.normalized_text}{issue_suffix}")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    # By module section
+    lines.append("## By Module")
+    lines.append("")
+    clusters = result.by_module(root)
+    for module_name, module_items in sorted(clusters.items()):
+        count = len(module_items)
+        lines.append(f"### {module_name} ({count} item{'s' if count != 1 else ''})")
+        lines.append("")
+        for item in sorted(module_items, key=lambda x: x.priority, reverse=True):
+            try:
+                item_rel: Path = item.file_path.relative_to(root)
+            except ValueError:
+                item_rel = item.file_path
+            item_rel_str = str(item_rel).replace("\\", "/")
+            m = ISSUE_ID_RE.search(item.text)
+            item_issue = f" ({m.group()})" if m else ""
+            lines.append(
+                f"- **[{item.priority}]** `{item.marker.upper()}` "
+                f"`{item_rel_str}:{item.line_number}` — {item.normalized_text}{item_issue}"
+            )
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(
@@ -424,6 +497,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     result = scan_repository(root, includes, excludes, verbose=args.verbose)
     print_summary(result, root)
+
+    backlog_path = root / "BACKLOG.md"
+    content = generate_backlog_md(result, root)
+    backlog_path.write_text(content, encoding="utf-8")
+    print(f"\nBacklog written to: {backlog_path}")
 
     return 0
 
