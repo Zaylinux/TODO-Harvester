@@ -109,3 +109,16 @@ Started: Tue, Mar  3, 2026 10:34:39 PM
   - BACKLOG.md contains the TODO marker text (e.g. `TODO`) in markdown formatting, so it WOULD be picked up by the scanner — always exclude it
   - `verify_completeness` does a full `scan_repository()` call (with deduplication) — counts only match when using identical excludes list
 ---
+
+## 2026-03-03 - US-001 (ralph/refactor-python-patterns branch)
+- Removed `from __future__ import annotations` (not needed in Python 3.13)
+- Replaced `from typing import Iterator, Optional` with `from collections.abc import Iterator`
+- Replaced all `Optional[X]` with `X | None` throughout the file (5 occurrences)
+- Files changed: `backlog_scanner.py`, `prd.json` (US-001 passes=true)
+- mypy --python-version 3.13 passes with zero issues
+- **Learnings for future iterations:**
+  - `from __future__ import annotations` is redundant in Python 3.13; remove it
+  - `collections.abc.Iterator` replaces `typing.Iterator` for Python 3.9+
+  - PEP 604 union syntax (`X | None`) works natively in Python 3.10+ at runtime
+  - The code already used lowercase `list[str]`, `dict[str, ...]` generics — no List/Dict/Tuple replacements needed
+---
