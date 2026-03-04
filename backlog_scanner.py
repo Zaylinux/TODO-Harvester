@@ -22,6 +22,9 @@ TODO_PATTERN = re.compile(
 
 JAVA_PACKAGE_RE = re.compile(r"^\s*package\s+([\w.]+)\s*;")
 
+# Matches GitHub-style (#123) or Jira-style (ABC-123) issue IDs
+ISSUE_ID_RE = re.compile(r"#\d+|[A-Z]+-\d+")
+
 DEFAULT_EXCLUDES: list[str] = [
     "node_modules",
     "target",
@@ -51,6 +54,11 @@ class TodoItem:
     def full_text(self) -> str:
         """Full marker + text representation."""
         return f"{self.marker.upper()}: {self.text.strip()}"
+
+    @property
+    def priority(self) -> int:
+        """Priority score (1-10): impact + confidence_boost - effort, clamped to 1-10."""
+        return priority_score(self)
 
 
 @dataclass
@@ -96,6 +104,43 @@ class ScanResult:
             else:
                 self.duplicates_removed += 1
         self.items = unique
+
+
+def _impact_score(item: TodoItem) -> int:
+    """Return impact score (1-5) based on marker and text keywords (highest match wins)."""
+    combined = f"{item.marker} {item.text}".upper()
+    if re.search(r"\bSECURITY\b|DATA\s+LOSS|\bP0\b|\bCRITICAL\b", combined):
+        return 5
+    if re.search(r"\bBUG\b|\bFIXME\b", combined):
+        return 4
+    if re.search(r"\bTODO\b", combined):
+        return 3
+    if re.search(r"\bREFACTOR\b|\bCLEANUP\b", combined):
+        return 2
+    if re.search(r"NICE\s+TO\s+HAVE", combined):
+        return 1
+    return 3  # default: TODO level
+
+
+def _effort_score(item: TodoItem) -> int:
+    """Return effort score (1-3) based on normalized text length."""
+    length = len(item.normalized_text)
+    if length < 50:
+        return 1
+    if length <= 150:
+        return 2
+    return 3
+
+
+def _confidence_boost(item: TodoItem) -> int:
+    """Return +1 if comment includes an issue ID (#123 or ABC-123), else 0."""
+    return 1 if ISSUE_ID_RE.search(item.text) else 0
+
+
+def priority_score(item: TodoItem) -> int:
+    """Calculate priority score = impact + confidence_boost - effort, clamped 1-10."""
+    score = _impact_score(item) + _confidence_boost(item) - _effort_score(item)
+    return max(1, min(10, score))
 
 
 def _detect_python_module(file_path: Path, root: Path) -> Optional[str]:

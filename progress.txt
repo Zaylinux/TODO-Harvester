@@ -62,3 +62,20 @@ Started: Tue, Mar  3, 2026 10:34:39 PM
   - Files directly in root get cluster `"(root)"`; files with no language match fall back to `parts[0]` (top-level directory)
   - `json.loads()` returns `Any` — annotate the local variable as `dict[str, object]` for mypy strict compliance
 ---
+
+## 2026-03-03 - US-004
+- Added `ISSUE_ID_RE` constant matching `#123` or `ABC-123` patterns
+- Added `_impact_score()`: checks combined `{marker} {text}` (uppercased) for keywords in descending priority order (SECURITY/P0/CRITICAL=5, BUG/FIXME=4, TODO=3, REFACTOR/CLEANUP=2, NICE TO HAVE=1); defaults to 3
+- Added `_effort_score()`: <50 chars=1, 50-150=2, >150=3 (based on normalized_text length)
+- Added `_confidence_boost()`: returns 1 if ISSUE_ID_RE matches in text, else 0
+- Added `priority_score(item)`: `impact + confidence - effort`, clamped 1-10
+- Added `TodoItem.priority` property that calls `priority_score(self)`
+- Files changed: `backlog_scanner.py`, `prd.json` (US-004 passes=true)
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - `TodoItem.priority` is a property (int 1-10) ready for US-005 sorting/display
+  - Impact check fires on combined `marker + " " + text` uppercased — highest-priority keyword wins (checked top-down)
+  - HACK/XXX markers with no text keywords default to impact=3 (TODO level)
+  - NICE TO HAVE (=1) and REFACTOR/CLEANUP (=2) only apply when marker is HACK/XXX; TODO marker always returns ≥3, FIXME always ≥4
+  - For US-005: sort items by `item.priority` descending, take top 10
+---
