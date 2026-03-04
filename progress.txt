@@ -220,3 +220,19 @@ Started: Tue, Mar  3, 2026 10:34:39 PM
   - `_DETECTOR_REGISTRY` makes adding new language detectors trivial: just add a function + extend the dict
   - `_detect_java_module` no longer raises `FileReadError`; it returns `None` on OSError — callers no longer need try/except around it
 ---
+
+## 2026-03-03 - US-008 (ralph/refactor-python-patterns branch)
+- Created `pyproject.toml` with full tooling configuration
+- Project metadata: name=todo-backlog-scanner, version=0.1.0, requires-python>=3.13
+- `[tool.black]`: line-length=88, target-version=["py313"]
+- `[tool.ruff]` + `[tool.ruff.lint]`: select=["E","F","I","N","W"]
+- `[tool.mypy]`: python_version="3.13", warn_return_any=true, disallow_untyped_defs=true
+- `[tool.pytest.ini_options]`: testpaths=["tests"], addopts with --cov flags
+- Dev dependencies via `[dependency-groups]` dev: pytest, pytest-cov, black, ruff, mypy
+- Files changed: `pyproject.toml` (new), `prd.json` (US-008 passes=true), `progress.txt`
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - `[dependency-groups]` is the PEP 735 standard for dev deps in pyproject.toml (Python 3.13 era); avoids `[project.optional-dependencies]`
+  - `[tool.ruff.lint]` is a separate subsection from `[tool.ruff]` for lint-specific config
+  - `[project.scripts]` entry point maps CLI name to `module:function`
+---
