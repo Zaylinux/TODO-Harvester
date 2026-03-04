@@ -1,18 +1,18 @@
 {
   "project": "TODO Backlog Scanner",
-  "branchName": "ralph/todo-backlog-scanner",
-  "description": "Python CLI tool that scans codebases for TODO/FIXME/HACK/XXX comments and generates a prioritized backlog",
+  "branchName": "ralph/refactor-python-patterns",
+  "description": "Refactor backlog_scanner.py to align with idiomatic Python 3.13 patterns and best practices — modern type hints, custom exceptions, EAFP, dataclass improvements, generators, enums, protocols, and tooling config",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Scan repository for TODO markers",
-      "description": "As a developer, I want to scan my entire repository for TODO/FIXME/HACK/XXX comments so I can see all technical debt in one place.",
+      "title": "Modernize type hints to Python 3.13 style",
+      "description": "As a developer, I want the codebase to use modern Python 3.13 type hints so the code is cleaner and doesn't rely on legacy typing imports.",
       "acceptanceCriteria": [
-        "CLI accepts --root flag for repo path (default: current directory)",
-        "CLI accepts --include flag for file patterns (default: **/*)",
-        "CLI accepts --exclude flag with defaults: node_modules, target, dist, .git, build, .next",
-        "Detects TODO:, FIXME:, HACK:, XXX: markers (case-insensitive)",
-        "Extracts file path, line number, and comment text for each marker",
+        "Remove `from __future__ import annotations`",
+        "Replace `Optional[X]` with `X | None` throughout",
+        "Replace `typing.Iterator` with `collections.abc.Iterator`",
+        "Remove unused imports from `typing` module",
+        "Use built-in `list`, `dict`, `tuple` generics consistently",
         "Typecheck passes"
       ],
       "priority": 1,
@@ -21,12 +21,15 @@
     },
     {
       "id": "US-002",
-      "title": "Deduplicate exact matches",
-      "description": "As a developer, I want duplicate TODO comments to appear only once so the backlog isn't cluttered with repetition.",
+      "title": "Add custom exception hierarchy",
+      "description": "As a developer, I want specific exception types so error handling is explicit and debuggable rather than catching broad OSError everywhere.",
       "acceptanceCriteria": [
-        "Exact text matches are deduplicated (whitespace-normalized)",
-        "First occurrence by file path alphabetically is kept",
-        "Duplicate count is tracked and shown in summary",
+        "Create `ScannerError` base exception class",
+        "Create `FileReadError(ScannerError)` for file I/O failures",
+        "Create `ConfigError(ScannerError)` for invalid CLI arguments or configuration",
+        "Replace bare `OSError` catches with specific exception handling and chaining (`raise ... from e`)",
+        "`resolve_args` raises `ConfigError` instead of calling `sys.exit` directly",
+        "`main()` catches `ScannerError` and exits cleanly with error message",
         "Typecheck passes"
       ],
       "priority": 2,
@@ -35,14 +38,13 @@
     },
     {
       "id": "US-003",
-      "title": "Cluster by module/package structure",
-      "description": "As a team lead, I want TODOs grouped by module so I can assign work by area of responsibility.",
+      "title": "Apply EAFP pattern and improve error handling",
+      "description": "As a developer, I want the code to follow Python's EAFP idiom so exception handling is idiomatic and consistent.",
       "acceptanceCriteria": [
-        "Python: detect packages via __init__.py or directory structure",
-        "JavaScript/TypeScript: detect modules via package.json or directory structure",
-        "Java: detect packages via package declarations",
-        "Fallback: group by top-level directory if no package structure detected",
-        "Each cluster shows count of items",
+        "`relative_to()` calls use try/except instead of pre-checking",
+        "File reading uses EAFP with specific exception types",
+        "Exception chaining (`from e`) used wherever exceptions are re-raised",
+        "No silent exception swallowing (no bare `except: pass`)",
         "Typecheck passes"
       ],
       "priority": 3,
@@ -51,13 +53,12 @@
     },
     {
       "id": "US-004",
-      "title": "Calculate priority scores",
-      "description": "As a developer, I want each TODO to have a priority score so I know what to tackle first.",
+      "title": "Improve dataclass usage and add validation",
+      "description": "As a developer, I want dataclasses to use __post_init__ validation and __slots__ for memory efficiency so the data model is robust and performant.",
       "acceptanceCriteria": [
-        "Impact score (1-5): SECURITY|DATA LOSS|P0|CRITICAL=5, BUG|FIXME=4, TODO=3, REFACTOR|CLEANUP=2, NICE TO HAVE=1",
-        "Effort score (1-3): <50 chars=1, 50-150=2, >150=3",
-        "Confidence boost (+1, max 5) if comment includes issue ID pattern (#123 or ABC-123)",
-        "Priority = impact + confidence - effort (clamped 1-10)",
+        "Add `slots=True` to `TodoItem` and `ScanResult` dataclasses",
+        "Add `__post_init__` validation to `TodoItem` (e.g., `line_number > 0`, `marker` is valid)",
+        "Use `frozen=True` on `TodoItem` since items shouldn't be mutated after creation",
         "Typecheck passes"
       ],
       "priority": 4,
@@ -66,14 +67,13 @@
     },
     {
       "id": "US-005",
-      "title": "Generate BACKLOG.md",
-      "description": "As a team lead, I want a formatted BACKLOG.md file so I can review it in sprint planning meetings.",
+      "title": "Use generators for lazy evaluation in large scans",
+      "description": "As a developer, I want the scanner to use generators and lazy evaluation so it handles large repositories without excessive memory usage.",
       "acceptanceCriteria": [
-        "Summary section: total count, breakdown by marker type (TODO/FIXME/HACK/XXX)",
-        "Top 10 highest priority items section with full details",
-        "By module section: grouped clusters with item counts",
-        "Each item shows: priority score, tag, file:line, text, optional owner/date/issue ID",
-        "File written to repo root as BACKLOG.md",
+        "`scan_file` returns an `Iterator[TodoItem]` instead of building a full list",
+        "`scan_repository` streams items lazily where possible",
+        "`generate_backlog_md` uses `StringIO` or generator-based string building instead of list concatenation",
+        "String building avoids `+=` in loops (use `join()` or `StringIO`)",
         "Typecheck passes"
       ],
       "priority": 5,
@@ -82,17 +82,64 @@
     },
     {
       "id": "US-006",
-      "title": "Verify scan completeness",
-      "description": "As a developer, I want confirmation that all TODOs were captured so I can trust the backlog.",
+      "title": "Extract constants and use enums for marker types",
+      "description": "As a developer, I want marker types and scoring constants defined as enums/constants so the scoring logic is self-documenting and easy to modify.",
       "acceptanceCriteria": [
-        "After generating BACKLOG.md, re-scan repository",
-        "Compare item counts: original scan vs verification scan",
-        "Print confirmation message: '✓ Verified: captured X items'",
-        "Exit with error if counts don't match",
+        "Create `Marker` enum with `TODO`, `FIXME`, `HACK`, `XXX` values",
+        "Extract impact keyword mappings into a structured constant (dict or enum)",
+        "Extract effort thresholds into named constants (`EFFORT_SHORT = 50`, `EFFORT_LONG = 150`)",
+        "Extract priority clamping bounds into constants (`MIN_PRIORITY = 1`, `MAX_PRIORITY = 10`)",
         "Typecheck passes"
       ],
       "priority": 6,
       "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Improve function signatures and use Protocol for extensibility",
+      "description": "As a developer, I want clean function signatures and protocol-based abstractions so the code is extensible and self-documenting.",
+      "acceptanceCriteria": [
+        "Create a `ModuleDetector` protocol: `def detect(file_path: Path, root: Path) -> str | None`",
+        "Register detectors by file extension instead of if/elif chain in `detect_module`",
+        "Module detection functions follow a consistent Protocol or callable signature",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Add pyproject.toml with full tooling configuration",
+      "description": "As a developer, I want a pyproject.toml with formatter, linter, type checker, and test runner configuration so the project has consistent development standards.",
+      "acceptanceCriteria": [
+        "`pyproject.toml` created with project metadata (name, version, requires-python >= 3.13)",
+        "`[tool.black]` configured with `line-length = 88`, `target-version = ['py313']`",
+        "`[tool.ruff]` configured with select rules: E, F, I, N, W",
+        "`[tool.mypy]` configured with `python_version = 3.13`, `warn_return_any = true`, `disallow_untyped_defs = true`",
+        "`[tool.pytest.ini_options]` configured with testpaths and coverage options",
+        "Dev dependencies listed: pytest, pytest-cov, black, ruff, mypy",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Apply naming and style conventions",
+      "description": "As a developer, I want consistent naming and style conventions so the code reads naturally and follows PEP 8.",
+      "acceptanceCriteria": [
+        "All functions have docstrings",
+        "Import order follows: stdlib then third-party then local (isort via ruff)",
+        "No mutable default arguments exist",
+        "`None` comparisons use `is None` / `is not None`",
+        "`isinstance()` used instead of `type()` for type checks",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
       "notes": ""
     }
   ]

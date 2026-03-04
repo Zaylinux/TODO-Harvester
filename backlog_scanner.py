@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """TODO Backlog Scanner - Scans codebases for TODO/FIXME/HACK/XXX comments."""
 
-from __future__ import annotations
-
 import argparse
 import fnmatch
 import json
 import re
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Iterator, Optional
 
 
 # Regex pattern to detect TODO markers (case-insensitive)
@@ -144,9 +142,9 @@ def priority_score(item: TodoItem) -> int:
     return max(1, min(10, score))
 
 
-def _detect_python_module(file_path: Path, root: Path) -> Optional[str]:
+def _detect_python_module(file_path: Path, root: Path) -> str | None:
     """Find the top-level Python package containing this file (via __init__.py)."""
-    top_pkg: Optional[Path] = None
+    top_pkg: Path | None = None
     current = file_path.parent
     while current != root:
         if current.parent == current:
@@ -163,7 +161,7 @@ def _detect_python_module(file_path: Path, root: Path) -> Optional[str]:
         return None
 
 
-def _detect_js_module(file_path: Path, root: Path) -> Optional[str]:
+def _detect_js_module(file_path: Path, root: Path) -> str | None:
     """Find the nearest package.json for a JS/TS file and return its name."""
     current = file_path.parent
     while current != root:
@@ -185,7 +183,7 @@ def _detect_js_module(file_path: Path, root: Path) -> Optional[str]:
     return None
 
 
-def _detect_java_module(file_path: Path) -> Optional[str]:
+def _detect_java_module(file_path: Path) -> str | None:
     """Extract Java package declaration from file."""
     try:
         with file_path.open(encoding="utf-8", errors="ignore") as f:
@@ -220,7 +218,7 @@ def detect_module(file_path: Path, root: Path) -> str:
         return "(root)"
 
     ext = file_path.suffix.lower()
-    module: Optional[str] = None
+    module: str | None = None
 
     if ext == ".py":
         module = _detect_python_module(file_path, root)
@@ -502,7 +500,7 @@ def verify_completeness(
     return 1
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Entry point for the backlog scanner CLI."""
     # Ensure UTF-8 output so Unicode characters (e.g. ✓) work on all platforms
     if hasattr(sys.stdout, "reconfigure"):
