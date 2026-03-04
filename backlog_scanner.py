@@ -301,30 +301,26 @@ def iter_files(
         yield path
 
 
-def scan_file(file_path: Path, root: Path) -> list[TodoItem]:
+def scan_file(file_path: Path, root: Path) -> Iterator[TodoItem]:
     """
-    Scan a single file for TODO markers.
+    Scan a single file for TODO markers, yielding items lazily.
 
     Raises FileReadError if the file cannot be read.
     """
-    items: list[TodoItem] = []
     try:
         with file_path.open(encoding="utf-8", errors="ignore") as f:
             for line_number, line in enumerate(f, start=1):
                 match = TODO_PATTERN.search(line)
                 if match:
-                    items.append(
-                        TodoItem(
-                            marker=match.group("marker"),
-                            text=match.group("text").strip(),
-                            file_path=file_path,
-                            line_number=line_number,
-                            raw_line=line.rstrip(),
-                        )
+                    yield TodoItem(
+                        marker=match.group("marker"),
+                        text=match.group("text").strip(),
+                        file_path=file_path,
+                        line_number=line_number,
+                        raw_line=line.rstrip(),
                     )
     except OSError as e:
         raise FileReadError(f"Cannot read file: {file_path}") from e
-    return items
 
 
 def scan_repository(
@@ -338,16 +334,17 @@ def scan_repository(
 
     for file_path in iter_files(root, includes, excludes):
         try:
-            items = scan_file(file_path, root)
-            result.files_scanned += 1
-            result.items.extend(items)
-            if verbose and items:
+            rel_display = ""
+            if verbose:
                 try:
                     rel_display = str(file_path.relative_to(root)).replace("\\", "/")
                 except ValueError:
                     rel_display = str(file_path)
-                for item in items:
+            for item in scan_file(file_path, root):
+                result.items.append(item)
+                if verbose:
                     print(f"  [{item.marker.upper()}] {rel_display}:{item.line_number} - {item.text}")
+            result.files_scanned += 1
         except FileReadError:
             result.files_skipped += 1
 
@@ -378,35 +375,34 @@ def print_summary(result: ScanResult, root: Path) -> None:
             print(f"    {module_name}: {len(module_items)}")
 
 
-def generate_backlog_md(result: ScanResult, root: Path) -> str:
-    """Generate BACKLOG.md content as a string."""
-    lines: list[str] = []
-    lines.append("# TODO Backlog")
-    lines.append("")
-    lines.append(f"Generated: {date.today().isoformat()}")
-    lines.append("")
+def _backlog_lines(result: ScanResult, root: Path) -> Iterator[str]:
+    """Yield BACKLOG.md lines lazily."""
+    yield "# TODO Backlog"
+    yield ""
+    yield f"Generated: {date.today().isoformat()}"
+    yield ""
 
     # Summary section
-    lines.append("## Summary")
-    lines.append("")
-    lines.append(f"- **Total**: {result.total} items")
-    lines.append(f"- **Duplicates removed**: {result.duplicates_removed}")
-    lines.append(f"- **Files scanned**: {result.files_scanned}")
-    lines.append("")
+    yield "## Summary"
+    yield ""
+    yield f"- **Total**: {result.total} items"
+    yield f"- **Duplicates removed**: {result.duplicates_removed}"
+    yield f"- **Files scanned**: {result.files_scanned}"
+    yield ""
 
     by_marker = result.by_marker()
-    lines.append("### By Marker Type")
-    lines.append("")
-    lines.append("| Marker | Count |")
-    lines.append("|--------|-------|")
+    yield "### By Marker Type"
+    yield ""
+    yield "| Marker | Count |"
+    yield "|--------|-------|"
     for marker in ["TODO", "FIXME", "HACK", "XXX"]:
         count = len(by_marker.get(marker, []))
-        lines.append(f"| {marker:<6} | {count:<5} |")
-    lines.append("")
+        yield f"| {marker:<6} | {count:<5} |"
+    yield ""
 
     # Top 10 highest priority items
-    lines.append("## Top 10 Highest Priority Items")
-    lines.append("")
+    yield "## Top 10 Highest Priority Items"
+    yield ""
     sorted_items = sorted(result.items, key=lambda x: x.priority, reverse=True)
     for rank, item in enumerate(sorted_items[:10], start=1):
         try:
@@ -416,23 +412,21 @@ def generate_backlog_md(result: ScanResult, root: Path) -> str:
         rel_str = str(rel_path).replace("\\", "/")
         issue_match = ISSUE_ID_RE.search(item.text)
         issue_suffix = f" ({issue_match.group()})" if issue_match else ""
-        lines.append(
-            f"### {rank}. [Score: {item.priority}] {item.marker.upper()} — `{rel_str}:{item.line_number}`"
-        )
-        lines.append("")
-        lines.append(f"> {item.normalized_text}{issue_suffix}")
-        lines.append("")
-        lines.append("---")
-        lines.append("")
+        yield f"### {rank}. [Score: {item.priority}] {item.marker.upper()} — `{rel_str}:{item.line_number}`"
+        yield ""
+        yield f"> {item.normalized_text}{issue_suffix}"
+        yield ""
+        yield "---"
+        yield ""
 
     # By module section
-    lines.append("## By Module")
-    lines.append("")
+    yield "## By Module"
+    yield ""
     clusters = result.by_module(root)
     for module_name, module_items in sorted(clusters.items()):
         count = len(module_items)
-        lines.append(f"### {module_name} ({count} item{'s' if count != 1 else ''})")
-        lines.append("")
+        yield f"### {module_name} ({count} item{'s' if count != 1 else ''})"
+        yield ""
         for item in sorted(module_items, key=lambda x: x.priority, reverse=True):
             try:
                 item_rel: Path = item.file_path.relative_to(root)
@@ -441,13 +435,16 @@ def generate_backlog_md(result: ScanResult, root: Path) -> str:
             item_rel_str = str(item_rel).replace("\\", "/")
             m = ISSUE_ID_RE.search(item.text)
             item_issue = f" ({m.group()})" if m else ""
-            lines.append(
+            yield (
                 f"- **[{item.priority}]** `{item.marker.upper()}` "
                 f"`{item_rel_str}:{item.line_number}` — {item.normalized_text}{item_issue}"
             )
-        lines.append("")
+        yield ""
 
-    return "\n".join(lines)
+
+def generate_backlog_md(result: ScanResult, root: Path) -> str:
+    """Generate BACKLOG.md content as a string."""
+    return "\n".join(_backlog_lines(result, root))
 
 
 def build_parser() -> argparse.ArgumentParser:

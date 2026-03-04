@@ -154,6 +154,20 @@ Started: Tue, Mar  3, 2026 10:34:39 PM
   - `except (SpecificType): pass` inside a while loop body is NOT a bare except — it intentionally continues the loop
 ---
 
+## 2026-03-03 - US-005 (ralph/refactor-python-patterns branch)
+- Changed `scan_file` from list-building to generator (yields `TodoItem` lazily with `yield`)
+- Updated `scan_repository` to consume `scan_file` generator inline: appends items one-by-one, prints verbose output as items arrive
+- Added `_backlog_lines(result, root) -> Iterator[str]` private generator that yields all BACKLOG.md lines lazily
+- Refactored `generate_backlog_md` to a one-liner: `return "\n".join(_backlog_lines(result, root))`
+- Files changed: `backlog_scanner.py`, `BACKLOG.md` (regenerated), `prd.json` (US-005 passes=true)
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - `scan_file` is now a generator — calling it returns a generator object immediately (no I/O yet); first iteration triggers `open()`
+  - `try/except OSError` inside a generator body works correctly; `FileReadError` propagates to the consumer's except clause
+  - `_backlog_lines` is private (underscore prefix); `generate_backlog_md` is the public API
+  - String building via generator + `"\n".join()` avoids both `+=` in loops and intermediate list allocation
+---
+
 ## 2026-03-03 - US-004 (ralph/refactor-python-patterns branch)
 - Added `VALID_MARKERS: frozenset[str]` module-level constant for marker validation
 - Added `slots=True, frozen=True` to `TodoItem` dataclass
