@@ -332,9 +332,12 @@ def scan_repository(
             result.files_scanned += 1
             result.items.extend(items)
             if verbose and items:
+                try:
+                    rel_display = str(file_path.relative_to(root)).replace("\\", "/")
+                except ValueError:
+                    rel_display = str(file_path)
                 for item in items:
-                    rel = file_path.relative_to(root)
-                    print(f"  [{item.marker.upper()}] {rel}:{item.line_number} - {item.text}")
+                    print(f"  [{item.marker.upper()}] {rel_display}:{item.line_number} - {item.text}")
         except FileReadError:
             result.files_skipped += 1
 

@@ -122,3 +122,34 @@ Started: Tue, Mar  3, 2026 10:34:39 PM
   - PEP 604 union syntax (`X | None`) works natively in Python 3.10+ at runtime
   - The code already used lowercase `list[str]`, `dict[str, ...]` generics — no List/Dict/Tuple replacements needed
 ---
+
+## 2026-03-03 - US-002 (ralph/refactor-python-patterns branch)
+- Added `ScannerError` base exception class, `FileReadError(ScannerError)`, `ConfigError(ScannerError)`
+- Changed `scan_file` signature from `tuple[list[TodoItem], bool]` to `list[TodoItem]`; raises `FileReadError` from OSError
+- Updated `scan_repository` to catch `FileReadError` and increment `files_skipped`
+- Updated `_detect_java_module` to raise `FileReadError` from OSError (with chaining)
+- Updated `detect_module` to catch `FileReadError` from `_detect_java_module` and fall back to None
+- Updated `resolve_args` to raise `ConfigError` instead of calling `sys.exit`
+- Updated `main()` to catch `ScannerError`, print error to stderr, return 1
+- Files changed: `backlog_scanner.py`, `prd.json` (US-002 passes=true), `BACKLOG.md` (regenerated)
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - `scan_file` now returns `list[TodoItem]` (not a tuple); callers use try/except FileReadError
+  - `_detect_js_module` still swallows OSError internally (intentional: continues directory walk on unreadable package.json)
+  - `resolve_args` raises `ConfigError`; `main()` must catch it — no more `sys.exit` inside helpers
+  - Exception chaining (`raise X from e`) preserves the original traceback for debugging
+---
+
+## 2026-03-03 - US-003 (ralph/refactor-python-patterns branch)
+- Wrapped `file_path.relative_to(root)` in `scan_repository` verbose path with try/except ValueError
+- All other `relative_to()` calls already used EAFP (try/except ValueError) from prior stories
+- File reading already uses EAFP with specific exception types (FileReadError raised from OSError)
+- Exception chaining already in place throughout (scan_file, _detect_java_module)
+- No bare `except: pass` exists; `_detect_js_module` named catches are intentional for walk continuity
+- Files changed: `backlog_scanner.py`, `prd.json` (US-003 passes=true)
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - US-001 and US-002 already applied most EAFP patterns; US-003 only needed the verbose-path `relative_to()` fix
+  - In scan_repository verbose path, `iter_files` guarantees files are under root but EAFP still applies
+  - `except (SpecificType): pass` inside a while loop body is NOT a bare except — it intentionally continues the loop
+---
