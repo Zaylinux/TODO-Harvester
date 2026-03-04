@@ -1,3 +1,30 @@
+## Codebase Patterns
+- Python 3.13 is available; use `python` (not `python3`) to run scripts
+- Use `python -m mypy backlog_scanner.py --strict` for typechecking (mypy must be installed via pip)
+- All path handling uses `pathlib.Path` for cross-platform compatibility
+- File reading uses `encoding="utf-8", errors="ignore"` to handle decode errors gracefully
+- TODO marker regex: `r"(?P<marker>TODO|FIXME|HACK|XXX):?\s*(?P<text>.*)"` with `re.IGNORECASE`
+- Exclude matching: check each part of the relative path against exclude patterns using `fnmatch`
+
+---
+
 # Ralph Progress Log
 Started: Tue, Mar  3, 2026 10:34:39 PM
+---
+
+## 2026-03-03 - US-001
+- Implemented `backlog_scanner.py` with full CLI argument parsing and file scanning
+- Files changed: `backlog_scanner.py` (new), `prd.json` (US-001 passes=true)
+- CLI supports `--root`, `--include`, `--exclude`, `--verbose` flags
+- Scanner streams file contents (doesn't load all into memory)
+- Detects TODO/FIXME/HACK/XXX markers case-insensitively, with or without trailing colon
+- Extracts file path, line number, comment text into `TodoItem` dataclass
+- `ScanResult` dataclass aggregates results with `by_marker()` grouping
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - `TodoItem.normalized_text` (whitespace-normalized) is ready for US-002 deduplication
+  - `ScanResult.by_marker()` is ready for US-005 summary section
+  - `iter_files()` and `scan_repository()` are the two main extension points for future stories
+  - The `main()` function accepts optional `argv` list for testability
+  - Exclude logic uses fnmatch on each path part, not the full path - handles nested exclusions correctly
 ---
