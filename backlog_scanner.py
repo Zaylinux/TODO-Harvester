@@ -46,7 +46,10 @@ DEFAULT_EXCLUDES: list[str] = [
 ]
 
 
-@dataclass
+VALID_MARKERS: frozenset[str] = frozenset({"TODO", "FIXME", "HACK", "XXX"})
+
+
+@dataclass(slots=True, frozen=True)
 class TodoItem:
     """Represents a single TODO/FIXME/HACK/XXX comment found in a file."""
 
@@ -55,6 +58,13 @@ class TodoItem:
     file_path: Path
     line_number: int
     raw_line: str
+
+    def __post_init__(self) -> None:
+        """Validate TodoItem fields on creation."""
+        if self.line_number <= 0:
+            raise ValueError(f"line_number must be > 0, got {self.line_number}")
+        if self.marker.upper() not in VALID_MARKERS:
+            raise ValueError(f"Invalid marker '{self.marker}'; must be one of {VALID_MARKERS}")
 
     @property
     def normalized_text(self) -> str:
@@ -72,7 +82,7 @@ class TodoItem:
         return priority_score(self)
 
 
-@dataclass
+@dataclass(slots=True)
 class ScanResult:
     """Result of a repository scan."""
 

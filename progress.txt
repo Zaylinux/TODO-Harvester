@@ -153,3 +153,17 @@ Started: Tue, Mar  3, 2026 10:34:39 PM
   - In scan_repository verbose path, `iter_files` guarantees files are under root but EAFP still applies
   - `except (SpecificType): pass` inside a while loop body is NOT a bare except — it intentionally continues the loop
 ---
+
+## 2026-03-03 - US-004 (ralph/refactor-python-patterns branch)
+- Added `VALID_MARKERS: frozenset[str]` module-level constant for marker validation
+- Added `slots=True, frozen=True` to `TodoItem` dataclass
+- Added `__post_init__` to `TodoItem` validating `line_number > 0` and `marker.upper() in VALID_MARKERS`
+- Added `slots=True` to `ScanResult` dataclass (mutable, so no `frozen=True`)
+- Files changed: `backlog_scanner.py`, `prd.json` (US-004 passes=true), `BACKLOG.md` (regenerated)
+- mypy --strict passes with zero issues; scanner runs correctly
+- **Learnings for future iterations:**
+  - `frozen=True` on `TodoItem` makes it hashable and immutable; `__post_init__` can read but not set attributes
+  - `slots=True` on mutable `ScanResult` is fine: reassigning slot fields (e.g. `self.items = unique`) is allowed
+  - `VALID_MARKERS` as a `frozenset[str]` is reusable for future enum migration (US-006)
+  - Properties (`normalized_text`, `full_text`, `priority`) still work normally on `frozen=True, slots=True` dataclasses
+---
