@@ -6,7 +6,9 @@
 - TODO marker regex: `r"(?P<marker>TODO|FIXME|HACK|XXX):?\s*(?P<text>.*)"` with `re.IGNORECASE`
 - Exclude matching: check each part of the relative path against exclude patterns using `fnmatch`
 - Module detection: `detect_module(file_path, root)` returns cluster name; uses `_detect_python_module`, `_detect_js_module`, `_detect_java_module` helpers; fallback is `parts[0]` (top-level dir) or `"(root)"`
-- `ScanResult.by_module(root)` groups items by module name; requires `root: Path` argument
+- `ScanResult.by_module(root)` groups items by module name; requires `root: Path` argument`
+- BACKLOG.md is always excluded from scans (added to excludes in `main()` if not already present)
+- Always call `sys.stdout.reconfigure(encoding="utf-8")` and `sys.stderr.reconfigure(encoding="utf-8")` at start of `main()` for Unicode output on Windows (cp1252 can't print ✓)
 
 ---
 
@@ -93,4 +95,17 @@ Started: Tue, Mar  3, 2026 10:34:39 PM
   - `str(rel_path).replace("\\", "/")` is needed for cross-platform path display in markdown on Windows
   - `try/except ValueError` around `file_path.relative_to(root)` guards against paths outside the root
   - BACKLOG.md is NOT excluded from subsequent scans; tasks/ and __pycache__ dirs picked up — consider adding to exclude list if noise is a concern
+---
+
+## 2026-03-03 - US-006
+- Added `verify_completeness(original_count, root, includes, excludes)` function that re-scans and compares item counts
+- Added UTF-8 stdout/stderr reconfiguration at start of `main()` to support Unicode output (✓) on Windows
+- Added BACKLOG.md to excludes in `main()` so the generated file never pollutes any scan
+- `verify_completeness` returns 0 on match, 1 on mismatch; `main()` returns this exit code
+- Files changed: `backlog_scanner.py`, `BACKLOG.md` (regenerated), `prd.json` (US-006 passes=true)
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - Windows terminal uses cp1252 by default; Unicode chars like ✓ require `sys.stdout.reconfigure(encoding="utf-8")` before any print calls
+  - BACKLOG.md contains the TODO marker text (e.g. `TODO`) in markdown formatting, so it WOULD be picked up by the scanner — always exclude it
+  - `verify_completeness` does a full `scan_repository()` call (with deduplication) — counts only match when using identical excludes list
 ---
