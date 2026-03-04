@@ -1,3 +1,111 @@
+## Codebase Patterns
+- Python 3.13 is available; use `python` (not `python3`) to run scripts
+- Use `python -m mypy backlog_scanner.py --strict` for typechecking (mypy must be installed via pip)
+- All path handling uses `pathlib.Path` for cross-platform compatibility
+- File reading uses `encoding="utf-8", errors="ignore"` to handle decode errors gracefully
+- TODO marker regex: `r"(?P<marker>TODO|FIXME|HACK|XXX):?\s*(?P<text>.*)"` with `re.IGNORECASE`
+- Exclude matching: check each part of the relative path against exclude patterns using `fnmatch`
+- Module detection: `detect_module(file_path, root)` returns cluster name; uses `_detect_python_module`, `_detect_js_module`, `_detect_java_module` helpers; fallback is `parts[0]` (top-level dir) or `"(root)"`
+- `ScanResult.by_module(root)` groups items by module name; requires `root: Path` argument`
+- BACKLOG.md is always excluded from scans (added to excludes in `main()` if not already present)
+- Always call `sys.stdout.reconfigure(encoding="utf-8")` and `sys.stderr.reconfigure(encoding="utf-8")` at start of `main()` for Unicode output on Windows (cp1252 can't print ✓)
+
+---
+
 # Ralph Progress Log
 Started: Tue, Mar  3, 2026 10:34:39 PM
+---
+
+## 2026-03-03 - US-001
+- Implemented `backlog_scanner.py` with full CLI argument parsing and file scanning
+- Files changed: `backlog_scanner.py` (new), `prd.json` (US-001 passes=true)
+- CLI supports `--root`, `--include`, `--exclude`, `--verbose` flags
+- Scanner streams file contents (doesn't load all into memory)
+- Detects TODO/FIXME/HACK/XXX markers case-insensitively, with or without trailing colon
+- Extracts file path, line number, comment text into `TodoItem` dataclass
+- `ScanResult` dataclass aggregates results with `by_marker()` grouping
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - `TodoItem.normalized_text` (whitespace-normalized) is ready for US-002 deduplication
+  - `ScanResult.by_marker()` is ready for US-005 summary section
+  - `iter_files()` and `scan_repository()` are the two main extension points for future stories
+  - The `main()` function accepts optional `argv` list for testability
+  - Exclude logic uses fnmatch on each path part, not the full path - handles nested exclusions correctly
+---
+
+## 2026-03-03 - US-002
+- Added `duplicates_removed: int = 0` field to `ScanResult`
+- Added `ScanResult.deduplicate()` method: sorts items by file path (alphabetical), then deduplicates by `(marker.upper(), normalized_text)` key
+- Called `result.deduplicate()` at end of `scan_repository()` before returning
+- Updated `print_summary()` to show `Duplicates removed` count in output
+- Files changed: `backlog_scanner.py`, `prd.json` (US-002 passes=true)
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - Dedup key is `(marker.upper(), normalized_text)` — same text under different markers (TODO vs FIXME) are NOT deduplicated
+  - `ScanResult.deduplicate()` also sorts `items` by file path alphabetically as a side effect — future code can rely on this ordering
+  - `duplicates_removed` field is always present on `ScanResult`; use it in US-005 BACKLOG.md summary
+---
+
+## 2026-03-03 - US-003
+- Added `JAVA_PACKAGE_RE` regex constant for Java package declarations
+- Added `_detect_python_module()`: walks directory ancestors looking for `__init__.py`, returns top-level package path with dot notation
+- Added `_detect_js_module()`: walks directory ancestors looking for `package.json`, returns `name` field or directory path
+- Added `_detect_java_module()`: reads first 50 lines of `.java` file, extracts `package` declaration
+- Added `detect_module(file_path, root)`: dispatches to language helpers by file extension, fallback = top-level dir or `"(root)"`
+- Added `ScanResult.by_module(root)`: groups items by detected module, returns `dict[str, list[TodoItem]]`
+- Updated `print_summary()` to print `By module:` section with sorted cluster names and item counts
+- Files changed: `backlog_scanner.py`, `prd.json` (US-003 passes=true)
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - `detect_module()` and `ScanResult.by_module(root)` are ready for US-005 BACKLOG.md "By module" section
+  - Python detection walks UP from file to root, tracking the highest ancestor with `__init__.py` (top-level package)
+  - JS detection walks UP from file to root, stops at first `package.json` found (nearest wins)
+  - Java detection only reads first 50 lines; package declarations always appear near top
+  - Files directly in root get cluster `"(root)"`; files with no language match fall back to `parts[0]` (top-level directory)
+  - `json.loads()` returns `Any` — annotate the local variable as `dict[str, object]` for mypy strict compliance
+---
+
+## 2026-03-03 - US-004
+- Added `ISSUE_ID_RE` constant matching `#123` or `ABC-123` patterns
+- Added `_impact_score()`: checks combined `{marker} {text}` (uppercased) for keywords in descending priority order (SECURITY/P0/CRITICAL=5, BUG/FIXME=4, TODO=3, REFACTOR/CLEANUP=2, NICE TO HAVE=1); defaults to 3
+- Added `_effort_score()`: <50 chars=1, 50-150=2, >150=3 (based on normalized_text length)
+- Added `_confidence_boost()`: returns 1 if ISSUE_ID_RE matches in text, else 0
+- Added `priority_score(item)`: `impact + confidence - effort`, clamped 1-10
+- Added `TodoItem.priority` property that calls `priority_score(self)`
+- Files changed: `backlog_scanner.py`, `prd.json` (US-004 passes=true)
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - `TodoItem.priority` is a property (int 1-10) ready for US-005 sorting/display
+  - Impact check fires on combined `marker + " " + text` uppercased — highest-priority keyword wins (checked top-down)
+  - HACK/XXX markers with no text keywords default to impact=3 (TODO level)
+  - NICE TO HAVE (=1) and REFACTOR/CLEANUP (=2) only apply when marker is HACK/XXX; TODO marker always returns ≥3, FIXME always ≥4
+  - For US-005: sort items by `item.priority` descending, take top 10
+---
+
+## 2026-03-03 - US-005
+- Added `generate_backlog_md(result, root)` function that produces full BACKLOG.md content
+- Added `from datetime import date` import for generation timestamp
+- Updated `main()` to call `generate_backlog_md()` and write `root / "BACKLOG.md"` after scan
+- BACKLOG.md structure: Summary (total, duplicates removed, files scanned, marker breakdown table) → Top 10 Highest Priority Items (rank, score, marker, file:line, text, issue ID if present) → By Module (sorted clusters, each item listed with priority/marker/location/text)
+- Files changed: `backlog_scanner.py`, `BACKLOG.md` (new), `prd.json` (US-005 passes=true)
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - `generate_backlog_md(result, root)` returns a `str`; caller writes to disk — easy to test in isolation
+  - Issue IDs are extracted inline using `ISSUE_ID_RE.search(item.text)`; owner/date fields not extracted (not present in scanned text)
+  - `str(rel_path).replace("\\", "/")` is needed for cross-platform path display in markdown on Windows
+  - `try/except ValueError` around `file_path.relative_to(root)` guards against paths outside the root
+  - BACKLOG.md is NOT excluded from subsequent scans; tasks/ and __pycache__ dirs picked up — consider adding to exclude list if noise is a concern
+---
+
+## 2026-03-03 - US-006
+- Added `verify_completeness(original_count, root, includes, excludes)` function that re-scans and compares item counts
+- Added UTF-8 stdout/stderr reconfiguration at start of `main()` to support Unicode output (✓) on Windows
+- Added BACKLOG.md to excludes in `main()` so the generated file never pollutes any scan
+- `verify_completeness` returns 0 on match, 1 on mismatch; `main()` returns this exit code
+- Files changed: `backlog_scanner.py`, `BACKLOG.md` (regenerated), `prd.json` (US-006 passes=true)
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - Windows terminal uses cp1252 by default; Unicode chars like ✓ require `sys.stdout.reconfigure(encoding="utf-8")` before any print calls
+  - BACKLOG.md contains the TODO marker text (e.g. `TODO`) in markdown formatting, so it WOULD be picked up by the scanner — always exclude it
+  - `verify_completeness` does a full `scan_repository()` call (with deduplication) — counts only match when using identical excludes list
 ---
