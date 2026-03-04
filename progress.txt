@@ -5,6 +5,8 @@
 - File reading uses `encoding="utf-8", errors="ignore"` to handle decode errors gracefully
 - TODO marker regex: `r"(?P<marker>TODO|FIXME|HACK|XXX):?\s*(?P<text>.*)"` with `re.IGNORECASE`
 - Exclude matching: check each part of the relative path against exclude patterns using `fnmatch`
+- Module detection: `detect_module(file_path, root)` returns cluster name; uses `_detect_python_module`, `_detect_js_module`, `_detect_java_module` helpers; fallback is `parts[0]` (top-level dir) or `"(root)"`
+- `ScanResult.by_module(root)` groups items by module name; requires `root: Path` argument
 
 ---
 
@@ -40,4 +42,23 @@ Started: Tue, Mar  3, 2026 10:34:39 PM
   - Dedup key is `(marker.upper(), normalized_text)` — same text under different markers (TODO vs FIXME) are NOT deduplicated
   - `ScanResult.deduplicate()` also sorts `items` by file path alphabetically as a side effect — future code can rely on this ordering
   - `duplicates_removed` field is always present on `ScanResult`; use it in US-005 BACKLOG.md summary
+---
+
+## 2026-03-03 - US-003
+- Added `JAVA_PACKAGE_RE` regex constant for Java package declarations
+- Added `_detect_python_module()`: walks directory ancestors looking for `__init__.py`, returns top-level package path with dot notation
+- Added `_detect_js_module()`: walks directory ancestors looking for `package.json`, returns `name` field or directory path
+- Added `_detect_java_module()`: reads first 50 lines of `.java` file, extracts `package` declaration
+- Added `detect_module(file_path, root)`: dispatches to language helpers by file extension, fallback = top-level dir or `"(root)"`
+- Added `ScanResult.by_module(root)`: groups items by detected module, returns `dict[str, list[TodoItem]]`
+- Updated `print_summary()` to print `By module:` section with sorted cluster names and item counts
+- Files changed: `backlog_scanner.py`, `prd.json` (US-003 passes=true)
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - `detect_module()` and `ScanResult.by_module(root)` are ready for US-005 BACKLOG.md "By module" section
+  - Python detection walks UP from file to root, tracking the highest ancestor with `__init__.py` (top-level package)
+  - JS detection walks UP from file to root, stops at first `package.json` found (nearest wins)
+  - Java detection only reads first 50 lines; package declarations always appear near top
+  - Files directly in root get cluster `"(root)"`; files with no language match fall back to `parts[0]` (top-level directory)
+  - `json.loads()` returns `Any` — annotate the local variable as `dict[str, object]` for mypy strict compliance
 ---
