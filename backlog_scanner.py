@@ -24,6 +24,18 @@ JAVA_PACKAGE_RE = re.compile(r"^\s*package\s+([\w.]+)\s*;")
 # Matches GitHub-style (#123) or Jira-style (ABC-123) issue IDs
 ISSUE_ID_RE = re.compile(r"#\d+|[A-Z]+-\d+")
 
+class ScannerError(Exception):
+    """Base exception for backlog scanner errors."""
+
+
+class FileReadError(ScannerError):
+    """Raised when a file cannot be read due to an I/O failure."""
+
+
+class ConfigError(ScannerError):
+    """Raised for invalid CLI arguments or configuration."""
+
+
 DEFAULT_EXCLUDES: list[str] = [
     "node_modules",
     "target",
@@ -193,8 +205,8 @@ def _detect_java_module(file_path: Path) -> str | None:
                 m = JAVA_PACKAGE_RE.match(line)
                 if m:
                     return m.group(1)
-    except OSError:
-        pass
+    except OSError as e:
+        raise FileReadError(f"Cannot read Java file: {file_path}") from e
     return None
 
 
@@ -225,7 +237,10 @@ def detect_module(file_path: Path, root: Path) -> str:
     elif ext in {".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"}:
         module = _detect_js_module(file_path, root)
     elif ext == ".java":
-        module = _detect_java_module(file_path)
+        try:
+            module = _detect_java_module(file_path)
+        except FileReadError:
+            module = None
 
     return module if module is not None else parts[0]
 
@@ -276,11 +291,11 @@ def iter_files(
         yield path
 
 
-def scan_file(file_path: Path, root: Path) -> tuple[list[TodoItem], bool]:
+def scan_file(file_path: Path, root: Path) -> list[TodoItem]:
     """
     Scan a single file for TODO markers.
 
-    Returns (items, success). success=False if file could not be read.
+    Raises FileReadError if the file cannot be read.
     """
     items: list[TodoItem] = []
     try:
@@ -297,9 +312,9 @@ def scan_file(file_path: Path, root: Path) -> tuple[list[TodoItem], bool]:
                             raw_line=line.rstrip(),
                         )
                     )
-    except OSError:
-        return [], False
-    return items, True
+    except OSError as e:
+        raise FileReadError(f"Cannot read file: {file_path}") from e
+    return items
 
 
 def scan_repository(
@@ -312,15 +327,15 @@ def scan_repository(
     result = ScanResult()
 
     for file_path in iter_files(root, includes, excludes):
-        items, success = scan_file(file_path, root)
-        if success:
+        try:
+            items = scan_file(file_path, root)
             result.files_scanned += 1
             result.items.extend(items)
             if verbose and items:
                 for item in items:
                     rel = file_path.relative_to(root)
                     print(f"  [{item.marker.upper()}] {rel}:{item.line_number} - {item.text}")
-        else:
+        except FileReadError:
             result.files_skipped += 1
 
     result.deduplicate()
@@ -464,14 +479,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def resolve_args(args: argparse.Namespace) -> tuple[Path, list[str], list[str]]:
-    """Validate and resolve CLI arguments."""
+    """Validate and resolve CLI arguments.
+
+    Raises ConfigError if the root path is invalid.
+    """
     root = args.root.resolve()
     if not root.exists():
-        print(f"Error: root path does not exist: {root}", file=sys.stderr)
-        sys.exit(1)
+        raise ConfigError(f"root path does not exist: {root}")
     if not root.is_dir():
-        print(f"Error: root path is not a directory: {root}", file=sys.stderr)
-        sys.exit(1)
+        raise ConfigError(f"root path is not a directory: {root}")
 
     includes: list[str] = args.includes if args.includes is not None else ["**/*"]
     excludes: list[str] = args.excludes if args.excludes is not None else list(DEFAULT_EXCLUDES)
@@ -511,7 +527,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    root, includes, excludes = resolve_args(args)
+    try:
+        root, includes, excludes = resolve_args(args)
+    except ScannerError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
     # Always exclude the generated BACKLOG.md so it doesn't pollute scans
     if "BACKLOG.md" not in excludes:
