@@ -9,6 +9,7 @@ import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import date
+from enum import Enum
 from pathlib import Path
 
 
@@ -36,6 +37,15 @@ class ConfigError(ScannerError):
     """Raised for invalid CLI arguments or configuration."""
 
 
+class Marker(str, Enum):
+    """Recognized TODO marker types."""
+
+    TODO = "TODO"
+    FIXME = "FIXME"
+    HACK = "HACK"
+    XXX = "XXX"
+
+
 DEFAULT_EXCLUDES: list[str] = [
     "node_modules",
     "target",
@@ -46,14 +56,26 @@ DEFAULT_EXCLUDES: list[str] = [
 ]
 
 
-VALID_MARKERS: frozenset[str] = frozenset({"TODO", "FIXME", "HACK", "XXX"})
+IMPACT_KEYWORDS: list[tuple[re.Pattern[str], int]] = [
+    (re.compile(r"\bSECURITY\b|DATA\s+LOSS|\bP0\b|\bCRITICAL\b"), 5),
+    (re.compile(r"\bBUG\b|\bFIXME\b"), 4),
+    (re.compile(r"\bTODO\b"), 3),
+    (re.compile(r"\bREFACTOR\b|\bCLEANUP\b"), 2),
+    (re.compile(r"NICE\s+TO\s+HAVE"), 1),
+]
+
+EFFORT_SHORT: int = 50
+EFFORT_LONG: int = 150
+
+MIN_PRIORITY: int = 1
+MAX_PRIORITY: int = 10
 
 
 @dataclass(slots=True, frozen=True)
 class TodoItem:
     """Represents a single TODO/FIXME/HACK/XXX comment found in a file."""
 
-    marker: str
+    marker: Marker
     text: str
     file_path: Path
     line_number: int
@@ -63,8 +85,8 @@ class TodoItem:
         """Validate TodoItem fields on creation."""
         if self.line_number <= 0:
             raise ValueError(f"line_number must be > 0, got {self.line_number}")
-        if self.marker.upper() not in VALID_MARKERS:
-            raise ValueError(f"Invalid marker '{self.marker}'; must be one of {VALID_MARKERS}")
+        if not isinstance(self.marker, Marker):
+            raise ValueError(f"Invalid marker {self.marker!r}; must be a Marker enum value")
 
     @property
     def normalized_text(self) -> str:
@@ -74,7 +96,7 @@ class TodoItem:
     @property
     def full_text(self) -> str:
         """Full marker + text representation."""
-        return f"{self.marker.upper()}: {self.text.strip()}"
+        return f"{self.marker.value}: {self.text.strip()}"
 
     @property
     def priority(self) -> int:
@@ -95,12 +117,11 @@ class ScanResult:
     def total(self) -> int:
         return len(self.items)
 
-    def by_marker(self) -> dict[str, list[TodoItem]]:
+    def by_marker(self) -> dict[Marker, list[TodoItem]]:
         """Group items by marker type."""
-        result: dict[str, list[TodoItem]] = {}
+        result: dict[Marker, list[TodoItem]] = {}
         for item in self.items:
-            key = item.marker.upper()
-            result.setdefault(key, []).append(item)
+            result.setdefault(item.marker, []).append(item)
         return result
 
     def by_module(self, root: Path) -> dict[str, list[TodoItem]]:
@@ -115,10 +136,10 @@ class ScanResult:
         """Deduplicate items by normalized text, keeping first occurrence by file path (alphabetical)."""
         # Sort by file path so the first alphabetical occurrence is kept
         self.items.sort(key=lambda item: str(item.file_path))
-        seen: set[tuple[str, str]] = set()
+        seen: set[tuple[Marker, str]] = set()
         unique: list[TodoItem] = []
         for item in self.items:
-            key = (item.marker.upper(), item.normalized_text)
+            key = (item.marker, item.normalized_text)
             if key not in seen:
                 seen.add(key)
                 unique.append(item)
@@ -129,26 +150,19 @@ class ScanResult:
 
 def _impact_score(item: TodoItem) -> int:
     """Return impact score (1-5) based on marker and text keywords (highest match wins)."""
-    combined = f"{item.marker} {item.text}".upper()
-    if re.search(r"\bSECURITY\b|DATA\s+LOSS|\bP0\b|\bCRITICAL\b", combined):
-        return 5
-    if re.search(r"\bBUG\b|\bFIXME\b", combined):
-        return 4
-    if re.search(r"\bTODO\b", combined):
-        return 3
-    if re.search(r"\bREFACTOR\b|\bCLEANUP\b", combined):
-        return 2
-    if re.search(r"NICE\s+TO\s+HAVE", combined):
-        return 1
+    combined = f"{item.marker.value} {item.text}".upper()
+    for pattern, score in IMPACT_KEYWORDS:
+        if pattern.search(combined):
+            return score
     return 3  # default: TODO level
 
 
 def _effort_score(item: TodoItem) -> int:
     """Return effort score (1-3) based on normalized text length."""
     length = len(item.normalized_text)
-    if length < 50:
+    if length < EFFORT_SHORT:
         return 1
-    if length <= 150:
+    if length <= EFFORT_LONG:
         return 2
     return 3
 
@@ -161,7 +175,7 @@ def _confidence_boost(item: TodoItem) -> int:
 def priority_score(item: TodoItem) -> int:
     """Calculate priority score = impact + confidence_boost - effort, clamped 1-10."""
     score = _impact_score(item) + _confidence_boost(item) - _effort_score(item)
-    return max(1, min(10, score))
+    return max(MIN_PRIORITY, min(MAX_PRIORITY, score))
 
 
 def _detect_python_module(file_path: Path, root: Path) -> str | None:
@@ -313,7 +327,7 @@ def scan_file(file_path: Path, root: Path) -> Iterator[TodoItem]:
                 match = TODO_PATTERN.search(line)
                 if match:
                     yield TodoItem(
-                        marker=match.group("marker"),
+                        marker=Marker(match.group("marker").upper()),
                         text=match.group("text").strip(),
                         file_path=file_path,
                         line_number=line_number,
@@ -343,7 +357,7 @@ def scan_repository(
             for item in scan_file(file_path, root):
                 result.items.append(item)
                 if verbose:
-                    print(f"  [{item.marker.upper()}] {rel_display}:{item.line_number} - {item.text}")
+                    print(f"  [{item.marker.value}] {rel_display}:{item.line_number} - {item.text}")
             result.files_scanned += 1
         except FileReadError:
             result.files_skipped += 1
@@ -363,10 +377,10 @@ def print_summary(result: ScanResult, root: Path) -> None:
     by_marker = result.by_marker()
     if by_marker:
         print("\n  Breakdown by marker:")
-        for marker in ["TODO", "FIXME", "HACK", "XXX"]:
+        for marker in Marker:
             count = len(by_marker.get(marker, []))
             if count:
-                print(f"    {marker:8}: {count}")
+                print(f"    {marker.value:8}: {count}")
 
     clusters = result.by_module(root)
     if clusters:
@@ -395,9 +409,9 @@ def _backlog_lines(result: ScanResult, root: Path) -> Iterator[str]:
     yield ""
     yield "| Marker | Count |"
     yield "|--------|-------|"
-    for marker in ["TODO", "FIXME", "HACK", "XXX"]:
+    for marker in Marker:
         count = len(by_marker.get(marker, []))
-        yield f"| {marker:<6} | {count:<5} |"
+        yield f"| {marker.value:<6} | {count:<5} |"
     yield ""
 
     # Top 10 highest priority items
@@ -412,7 +426,7 @@ def _backlog_lines(result: ScanResult, root: Path) -> Iterator[str]:
         rel_str = str(rel_path).replace("\\", "/")
         issue_match = ISSUE_ID_RE.search(item.text)
         issue_suffix = f" ({issue_match.group()})" if issue_match else ""
-        yield f"### {rank}. [Score: {item.priority}] {item.marker.upper()} — `{rel_str}:{item.line_number}`"
+        yield f"### {rank}. [Score: {item.priority}] {item.marker.value} — `{rel_str}:{item.line_number}`"
         yield ""
         yield f"> {item.normalized_text}{issue_suffix}"
         yield ""
@@ -436,7 +450,7 @@ def _backlog_lines(result: ScanResult, root: Path) -> Iterator[str]:
             m = ISSUE_ID_RE.search(item.text)
             item_issue = f" ({m.group()})" if m else ""
             yield (
-                f"- **[{item.priority}]** `{item.marker.upper()}` "
+                f"- **[{item.priority}]** `{item.marker.value}` "
                 f"`{item_rel_str}:{item.line_number}` — {item.normalized_text}{item_issue}"
             )
         yield ""

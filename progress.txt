@@ -1,4 +1,7 @@
 ## Codebase Patterns
+- `Marker(str, Enum)` is used for marker types; `TodoItem.marker` is typed `Marker`; convert regex matches with `Marker(match.group("marker").upper())`
+- Use `marker.value` (not `marker.upper()`) to get the string value from a `Marker` enum
+- `by_marker()` returns `dict[Marker, list[TodoItem]]`; iterate with `for marker in Marker:` for guaranteed ordering
 - Python 3.13 is available; use `python` (not `python3`) to run scripts
 - Use `python -m mypy backlog_scanner.py --strict` for typechecking (mypy must be installed via pip)
 - All path handling uses `pathlib.Path` for cross-platform compatibility
@@ -97,7 +100,7 @@ Started: Tue, Mar  3, 2026 10:34:39 PM
   - BACKLOG.md is NOT excluded from subsequent scans; tasks/ and __pycache__ dirs picked up — consider adding to exclude list if noise is a concern
 ---
 
-## 2026-03-03 - US-006
+## 2026-03-03 - US-006 (ralph/refactor-python-patterns branch)
 - Added `verify_completeness(original_count, root, includes, excludes)` function that re-scans and compares item counts
 - Added UTF-8 stdout/stderr reconfiguration at start of `main()` to support Unicode output (✓) on Windows
 - Added BACKLOG.md to excludes in `main()` so the generated file never pollutes any scan
@@ -180,4 +183,24 @@ Started: Tue, Mar  3, 2026 10:34:39 PM
   - `slots=True` on mutable `ScanResult` is fine: reassigning slot fields (e.g. `self.items = unique`) is allowed
   - `VALID_MARKERS` as a `frozenset[str]` is reusable for future enum migration (US-006)
   - Properties (`normalized_text`, `full_text`, `priority`) still work normally on `frozen=True, slots=True` dataclasses
+---
+
+## 2026-03-03 - US-006 (ralph/refactor-python-patterns branch)
+- Added `Marker(str, Enum)` with `TODO`, `FIXME`, `HACK`, `XXX` values
+- Removed `VALID_MARKERS` frozenset; replaced with `Marker` enum throughout
+- Changed `TodoItem.marker` type from `str` to `Marker`; `__post_init__` uses `isinstance(self.marker, Marker)`
+- Added `IMPACT_KEYWORDS: list[tuple[re.Pattern[str], int]]` — compiled regex patterns mapped to scores
+- Added `EFFORT_SHORT = 50`, `EFFORT_LONG = 150`, `MIN_PRIORITY = 1`, `MAX_PRIORITY = 10` named constants
+- Refactored `_impact_score` to loop over `IMPACT_KEYWORDS` instead of inline `re.search` calls
+- Updated `_effort_score` and `priority_score` to use named constants
+- `scan_file` converts regex match to `Marker(match.group("marker").upper())`
+- `by_marker()` now returns `dict[Marker, list[TodoItem]]`; all callers iterate `for marker in Marker:`
+- All `item.marker.upper()` usages replaced with `item.marker.value`
+- Files changed: `backlog_scanner.py`, `BACKLOG.md` (regenerated), `prd.json` (US-006 passes=true), `progress.txt`
+- mypy --strict passes with zero issues; scanner runs correctly (24 items, verified)
+- **Learnings for future iterations:**
+  - `Marker(str, Enum)` allows `Marker.TODO == "TODO"` to be True (hash-compatible with str), but dict keys are `Marker` type
+  - `match.group("marker").upper()` is needed before `Marker(...)` since regex is case-insensitive
+  - `for marker in Marker:` iterates in definition order (TODO, FIXME, HACK, XXX) — stable ordering guaranteed
+  - Removing `VALID_MARKERS` is safe once `Marker` enum exists; `__post_init__` uses `isinstance` check instead
 ---
