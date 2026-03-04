@@ -28,3 +28,16 @@ Started: Tue, Mar  3, 2026 10:34:39 PM
   - The `main()` function accepts optional `argv` list for testability
   - Exclude logic uses fnmatch on each path part, not the full path - handles nested exclusions correctly
 ---
+
+## 2026-03-03 - US-002
+- Added `duplicates_removed: int = 0` field to `ScanResult`
+- Added `ScanResult.deduplicate()` method: sorts items by file path (alphabetical), then deduplicates by `(marker.upper(), normalized_text)` key
+- Called `result.deduplicate()` at end of `scan_repository()` before returning
+- Updated `print_summary()` to show `Duplicates removed` count in output
+- Files changed: `backlog_scanner.py`, `prd.json` (US-002 passes=true)
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - Dedup key is `(marker.upper(), normalized_text)` — same text under different markers (TODO vs FIXME) are NOT deduplicated
+  - `ScanResult.deduplicate()` also sorts `items` by file path alphabetically as a side effect — future code can rely on this ordering
+  - `duplicates_removed` field is always present on `ScanResult`; use it in US-005 BACKLOG.md summary
+---
