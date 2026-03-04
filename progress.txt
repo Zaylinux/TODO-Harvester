@@ -8,7 +8,9 @@
 - File reading uses `encoding="utf-8", errors="ignore"` to handle decode errors gracefully
 - TODO marker regex: `r"(?P<marker>TODO|FIXME|HACK|XXX):?\s*(?P<text>.*)"` with `re.IGNORECASE`
 - Exclude matching: check each part of the relative path against exclude patterns using `fnmatch`
-- Module detection: `detect_module(file_path, root)` returns cluster name; uses `_detect_python_module`, `_detect_js_module`, `_detect_java_module` helpers; fallback is `parts[0]` (top-level dir) or `"(root)"`
+- Module detection: `detect_module(file_path, root)` dispatches via `_DETECTOR_REGISTRY: dict[str, ModuleDetector]` keyed by file extension; fallback is `parts[0]` (top-level dir) or `"(root)"`
+- `ModuleDetector` Protocol has `__call__(self, file_path: Path, root: Path) -> str | None`; plain functions with matching signatures satisfy it automatically
+- All language detectors now share signature `(file_path: Path, root: Path) -> str | None` — `_detect_java_module` accepts `root` but does not use it (protocol compliance)
 - `ScanResult.by_module(root)` groups items by module name; requires `root: Path` argument`
 - BACKLOG.md is always excluded from scans (added to excludes in `main()` if not already present)
 - Always call `sys.stdout.reconfigure(encoding="utf-8")` and `sys.stderr.reconfigure(encoding="utf-8")` at start of `main()` for Unicode output on Windows (cp1252 can't print ✓)
@@ -203,4 +205,18 @@ Started: Tue, Mar  3, 2026 10:34:39 PM
   - `match.group("marker").upper()` is needed before `Marker(...)` since regex is case-insensitive
   - `for marker in Marker:` iterates in definition order (TODO, FIXME, HACK, XXX) — stable ordering guaranteed
   - Removing `VALID_MARKERS` is safe once `Marker` enum exists; `__post_init__` uses `isinstance` check instead
+---
+
+## 2026-03-03 - US-007 (ralph/refactor-python-patterns branch)
+- Added `ModuleDetector(Protocol)` with `__call__(self, file_path: Path, root: Path) -> str | None`
+- Updated `_detect_java_module` signature to `(file_path: Path, root: Path) -> str | None`; now catches `OSError` internally and returns `None` (no longer raises `FileReadError`)
+- Added `_DETECTOR_REGISTRY: dict[str, ModuleDetector]` mapping each extension to its detector function
+- Refactored `detect_module` to look up the registry with `.get(ext)` instead of if/elif chain
+- Files changed: `backlog_scanner.py`, `BACKLOG.md` (regenerated), `prd.json` (US-007 passes=true), `progress.txt`
+- mypy --strict passes with zero issues; scanner runs correctly (24 items, verified)
+- **Learnings for future iterations:**
+  - `Protocol` with `__call__` makes plain functions satisfy the protocol automatically — no wrapper classes needed
+  - `_detect_java_module` accepts `root` for protocol conformance but doesn't use it; `# noqa: ARG001` comment documents this is intentional
+  - `_DETECTOR_REGISTRY` makes adding new language detectors trivial: just add a function + extend the dict
+  - `_detect_java_module` no longer raises `FileReadError`; it returns `None` on OSError — callers no longer need try/except around it
 ---

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
 from pathlib import Path
+from typing import Protocol
 
 
 # Regex pattern to detect TODO markers (case-insensitive)
@@ -178,6 +179,14 @@ def priority_score(item: TodoItem) -> int:
     return max(MIN_PRIORITY, min(MAX_PRIORITY, score))
 
 
+class ModuleDetector(Protocol):
+    """Callable protocol for module/package detection from a source file."""
+
+    def __call__(self, file_path: Path, root: Path) -> str | None:
+        """Detect module name for file_path relative to root, or None if undetectable."""
+        ...
+
+
 def _detect_python_module(file_path: Path, root: Path) -> str | None:
     """Find the top-level Python package containing this file (via __init__.py)."""
     top_pkg: Path | None = None
@@ -219,7 +228,7 @@ def _detect_js_module(file_path: Path, root: Path) -> str | None:
     return None
 
 
-def _detect_java_module(file_path: Path) -> str | None:
+def _detect_java_module(file_path: Path, root: Path) -> str | None:  # noqa: ARG001
     """Extract Java package declaration from file."""
     try:
         with file_path.open(encoding="utf-8", errors="ignore") as f:
@@ -229,20 +238,29 @@ def _detect_java_module(file_path: Path) -> str | None:
                 m = JAVA_PACKAGE_RE.match(line)
                 if m:
                     return m.group(1)
-    except OSError as e:
-        raise FileReadError(f"Cannot read Java file: {file_path}") from e
+    except OSError:
+        return None
     return None
+
+
+_DETECTOR_REGISTRY: dict[str, ModuleDetector] = {
+    ".py": _detect_python_module,
+    ".js": _detect_js_module,
+    ".ts": _detect_js_module,
+    ".jsx": _detect_js_module,
+    ".tsx": _detect_js_module,
+    ".mjs": _detect_js_module,
+    ".cjs": _detect_js_module,
+    ".java": _detect_java_module,
+}
 
 
 def detect_module(file_path: Path, root: Path) -> str:
     """
     Detect the module/package cluster name for a file.
 
-    Detection by file type:
-    - .py  : top-level Python package (via __init__.py), else fallback
-    - .js/.ts/.jsx/.tsx/.mjs/.cjs: nearest package.json name, else fallback
-    - .java: package declaration in file, else fallback
-    - Fallback: top-level directory under root, or "(root)" if file is at root level
+    Dispatches to a registered `ModuleDetector` by file extension. Fallback:
+    top-level directory under root, or "(root)" if file is at root level.
     """
     try:
         relative = file_path.relative_to(root)
@@ -254,17 +272,8 @@ def detect_module(file_path: Path, root: Path) -> str:
         return "(root)"
 
     ext = file_path.suffix.lower()
-    module: str | None = None
-
-    if ext == ".py":
-        module = _detect_python_module(file_path, root)
-    elif ext in {".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"}:
-        module = _detect_js_module(file_path, root)
-    elif ext == ".java":
-        try:
-            module = _detect_java_module(file_path)
-        except FileReadError:
-            module = None
+    detector = _DETECTOR_REGISTRY.get(ext)
+    module: str | None = detector(file_path, root) if detector is not None else None
 
     return module if module is not None else parts[0]
 
