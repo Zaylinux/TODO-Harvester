@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import json
 import re
 import sys
 from dataclasses import dataclass, field
@@ -18,6 +19,8 @@ TODO_PATTERN = re.compile(
     r"(?P<marker>TODO|FIXME|HACK|XXX):?\s*(?P<text>.*)",
     re.IGNORECASE,
 )
+
+JAVA_PACKAGE_RE = re.compile(r"^\s*package\s+([\w.]+)\s*;")
 
 DEFAULT_EXCLUDES: list[str] = [
     "node_modules",
@@ -71,6 +74,14 @@ class ScanResult:
             result.setdefault(key, []).append(item)
         return result
 
+    def by_module(self, root: Path) -> dict[str, list[TodoItem]]:
+        """Group items by detected module/package cluster."""
+        clusters: dict[str, list[TodoItem]] = {}
+        for item in self.items:
+            module = detect_module(item.file_path, root)
+            clusters.setdefault(module, []).append(item)
+        return clusters
+
     def deduplicate(self) -> None:
         """Deduplicate items by normalized text, keeping first occurrence by file path (alphabetical)."""
         # Sort by file path so the first alphabetical occurrence is kept
@@ -85,6 +96,94 @@ class ScanResult:
             else:
                 self.duplicates_removed += 1
         self.items = unique
+
+
+def _detect_python_module(file_path: Path, root: Path) -> Optional[str]:
+    """Find the top-level Python package containing this file (via __init__.py)."""
+    top_pkg: Optional[Path] = None
+    current = file_path.parent
+    while current != root:
+        if current.parent == current:
+            break
+        if (current / "__init__.py").exists():
+            top_pkg = current
+        current = current.parent
+    if top_pkg is None:
+        return None
+    try:
+        pkg_rel = top_pkg.relative_to(root)
+        return ".".join(pkg_rel.parts)
+    except ValueError:
+        return None
+
+
+def _detect_js_module(file_path: Path, root: Path) -> Optional[str]:
+    """Find the nearest package.json for a JS/TS file and return its name."""
+    current = file_path.parent
+    while current != root:
+        pkg_json = current / "package.json"
+        if pkg_json.exists():
+            try:
+                raw = pkg_json.read_text(encoding="utf-8", errors="ignore")
+                data: dict[str, object] = json.loads(raw)
+                name = data.get("name")
+                if isinstance(name, str) and name:
+                    return name
+                pkg_rel = current.relative_to(root)
+                return ".".join(pkg_rel.parts)
+            except (OSError, json.JSONDecodeError, ValueError):
+                pass
+        if current.parent == current:
+            break
+        current = current.parent
+    return None
+
+
+def _detect_java_module(file_path: Path) -> Optional[str]:
+    """Extract Java package declaration from file."""
+    try:
+        with file_path.open(encoding="utf-8", errors="ignore") as f:
+            for i, line in enumerate(f):
+                if i > 50:
+                    break
+                m = JAVA_PACKAGE_RE.match(line)
+                if m:
+                    return m.group(1)
+    except OSError:
+        pass
+    return None
+
+
+def detect_module(file_path: Path, root: Path) -> str:
+    """
+    Detect the module/package cluster name for a file.
+
+    Detection by file type:
+    - .py  : top-level Python package (via __init__.py), else fallback
+    - .js/.ts/.jsx/.tsx/.mjs/.cjs: nearest package.json name, else fallback
+    - .java: package declaration in file, else fallback
+    - Fallback: top-level directory under root, or "(root)" if file is at root level
+    """
+    try:
+        relative = file_path.relative_to(root)
+    except ValueError:
+        return file_path.parent.name or "(root)"
+
+    parts = relative.parts
+    if len(parts) <= 1:
+        return "(root)"
+
+    ext = file_path.suffix.lower()
+    module: Optional[str] = None
+
+    if ext == ".py":
+        module = _detect_python_module(file_path, root)
+    elif ext in {".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"}:
+        module = _detect_js_module(file_path, root)
+    elif ext == ".java":
+        module = _detect_java_module(file_path)
+
+    return module if module is not None else parts[0]
 
 
 def is_excluded(path: Path, root: Path, excludes: list[str]) -> bool:
@@ -199,6 +298,12 @@ def print_summary(result: ScanResult, root: Path) -> None:
             count = len(by_marker.get(marker, []))
             if count:
                 print(f"    {marker:8}: {count}")
+
+    clusters = result.by_module(root)
+    if clusters:
+        print("\n  By module:")
+        for module_name, module_items in sorted(clusters.items()):
+            print(f"    {module_name}: {len(module_items)}")
 
 
 def build_parser() -> argparse.ArgumentParser:
