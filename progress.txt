@@ -79,3 +79,18 @@ Started: Tue, Mar  3, 2026 10:34:39 PM
   - NICE TO HAVE (=1) and REFACTOR/CLEANUP (=2) only apply when marker is HACK/XXX; TODO marker always returns ≥3, FIXME always ≥4
   - For US-005: sort items by `item.priority` descending, take top 10
 ---
+
+## 2026-03-03 - US-005
+- Added `generate_backlog_md(result, root)` function that produces full BACKLOG.md content
+- Added `from datetime import date` import for generation timestamp
+- Updated `main()` to call `generate_backlog_md()` and write `root / "BACKLOG.md"` after scan
+- BACKLOG.md structure: Summary (total, duplicates removed, files scanned, marker breakdown table) → Top 10 Highest Priority Items (rank, score, marker, file:line, text, issue ID if present) → By Module (sorted clusters, each item listed with priority/marker/location/text)
+- Files changed: `backlog_scanner.py`, `BACKLOG.md` (new), `prd.json` (US-005 passes=true)
+- mypy --strict passes with zero issues
+- **Learnings for future iterations:**
+  - `generate_backlog_md(result, root)` returns a `str`; caller writes to disk — easy to test in isolation
+  - Issue IDs are extracted inline using `ISSUE_ID_RE.search(item.text)`; owner/date fields not extracted (not present in scanned text)
+  - `str(rel_path).replace("\\", "/")` is needed for cross-platform path display in markdown on Windows
+  - `try/except ValueError` around `file_path.relative_to(root)` guards against paths outside the root
+  - BACKLOG.md is NOT excluded from subsequent scans; tasks/ and __pycache__ dirs picked up — consider adding to exclude list if noise is a concern
+---
