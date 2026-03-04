@@ -481,12 +481,43 @@ def resolve_args(args: argparse.Namespace) -> tuple[Path, list[str], list[str]]:
     return root, includes, excludes
 
 
+def verify_completeness(
+    original_count: int,
+    root: Path,
+    includes: list[str],
+    excludes: list[str],
+) -> int:
+    """Re-scan repository and verify item count matches original scan.
+
+    Returns 0 if counts match, 1 if they don't.
+    """
+    verification = scan_repository(root, includes, excludes)
+    if verification.total == original_count:
+        print(f"✓ Verified: captured {original_count} items")
+        return 0
+    print(
+        f"✗ Verification failed: original scan={original_count}, re-scan={verification.total}",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """Entry point for the backlog scanner CLI."""
+    # Ensure UTF-8 output so Unicode characters (e.g. ✓) work on all platforms
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8")
+
     parser = build_parser()
     args = parser.parse_args(argv)
 
     root, includes, excludes = resolve_args(args)
+
+    # Always exclude the generated BACKLOG.md so it doesn't pollute scans
+    if "BACKLOG.md" not in excludes:
+        excludes = excludes + ["BACKLOG.md"]
 
     print(f"Scanning: {root}")
     print(f"  Include patterns : {includes}")
@@ -503,7 +534,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     backlog_path.write_text(content, encoding="utf-8")
     print(f"\nBacklog written to: {backlog_path}")
 
-    return 0
+    return verify_completeness(result.total, root, includes, excludes)
 
 
 if __name__ == "__main__":
