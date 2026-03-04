@@ -13,7 +13,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
-
 # Regex pattern to detect TODO markers (case-insensitive)
 # Matches: TODO, FIXME, HACK, XXX (with optional colon)
 TODO_PATTERN = re.compile(
@@ -87,7 +86,8 @@ class TodoItem:
         if self.line_number <= 0:
             raise ValueError(f"line_number must be > 0, got {self.line_number}")
         if not isinstance(self.marker, Marker):
-            raise ValueError(f"Invalid marker {self.marker!r}; must be a Marker enum value")
+            msg = f"Invalid marker {self.marker!r}; must be a Marker enum value"
+            raise ValueError(msg)
 
     @property
     def normalized_text(self) -> str:
@@ -101,7 +101,7 @@ class TodoItem:
 
     @property
     def priority(self) -> int:
-        """Priority score (1-10): impact + confidence_boost - effort, clamped to 1-10."""
+        """Compute priority score (1-10): impact + confidence_boost - effort."""
         return priority_score(self)
 
 
@@ -116,6 +116,7 @@ class ScanResult:
 
     @property
     def total(self) -> int:
+        """Total number of TODO items in the scan result."""
         return len(self.items)
 
     def by_marker(self) -> dict[Marker, list[TodoItem]]:
@@ -134,7 +135,7 @@ class ScanResult:
         return clusters
 
     def deduplicate(self) -> None:
-        """Deduplicate items by normalized text, keeping first occurrence by file path (alphabetical)."""
+        """Deduplicate by (marker, normalized_text), keeping first occurrence."""
         # Sort by file path so the first alphabetical occurrence is kept
         self.items.sort(key=lambda item: str(item.file_path))
         seen: set[tuple[Marker, str]] = set()
@@ -150,7 +151,7 @@ class ScanResult:
 
 
 def _impact_score(item: TodoItem) -> int:
-    """Return impact score (1-5) based on marker and text keywords (highest match wins)."""
+    """Return impact score (1-5); highest-priority keyword match wins."""
     combined = f"{item.marker.value} {item.text}".upper()
     for pattern, score in IMPACT_KEYWORDS:
         if pattern.search(combined):
@@ -183,7 +184,7 @@ class ModuleDetector(Protocol):
     """Callable protocol for module/package detection from a source file."""
 
     def __call__(self, file_path: Path, root: Path) -> str | None:
-        """Detect module name for file_path relative to root, or None if undetectable."""
+        """Detect module name for file_path relative to root, or None."""
         ...
 
 
@@ -279,7 +280,7 @@ def detect_module(file_path: Path, root: Path) -> str:
 
 
 def is_excluded(path: Path, root: Path, excludes: list[str]) -> bool:
-    """Return True if path is under an excluded directory or matches an exclude pattern."""
+    """Return True if any part of path matches an exclude pattern."""
     try:
         relative = path.relative_to(root)
     except ValueError:
@@ -303,7 +304,9 @@ def matches_include(path: Path, root: Path, includes: list[str]) -> bool:
 
     relative_str = str(relative).replace("\\", "/")
     for pattern in includes:
-        if fnmatch.fnmatch(relative_str, pattern) or fnmatch.fnmatch(path.name, pattern):
+        if fnmatch.fnmatch(relative_str, pattern) or fnmatch.fnmatch(
+            path.name, pattern
+        ):
             return True
     return False
 
@@ -366,7 +369,10 @@ def scan_repository(
             for item in scan_file(file_path, root):
                 result.items.append(item)
                 if verbose:
-                    print(f"  [{item.marker.value}] {rel_display}:{item.line_number} - {item.text}")
+                    print(
+                        f"  [{item.marker.value}] {rel_display}:{item.line_number}"
+                        f" - {item.text}"
+                    )
             result.files_scanned += 1
         except FileReadError:
             result.files_skipped += 1
@@ -435,7 +441,11 @@ def _backlog_lines(result: ScanResult, root: Path) -> Iterator[str]:
         rel_str = str(rel_path).replace("\\", "/")
         issue_match = ISSUE_ID_RE.search(item.text)
         issue_suffix = f" ({issue_match.group()})" if issue_match else ""
-        yield f"### {rank}. [Score: {item.priority}] {item.marker.value} — `{rel_str}:{item.line_number}`"
+        heading = (
+            f"### {rank}. [Score: {item.priority}] {item.marker.value}"
+            f" — `{rel_str}:{item.line_number}`"
+        )
+        yield heading
         yield ""
         yield f"> {item.normalized_text}{issue_suffix}"
         yield ""
@@ -458,9 +468,10 @@ def _backlog_lines(result: ScanResult, root: Path) -> Iterator[str]:
             item_rel_str = str(item_rel).replace("\\", "/")
             m = ISSUE_ID_RE.search(item.text)
             item_issue = f" ({m.group()})" if m else ""
+            loc = f"`{item_rel_str}:{item.line_number}`"
             yield (
                 f"- **[{item.priority}]** `{item.marker.value}` "
-                f"`{item_rel_str}:{item.line_number}` — {item.normalized_text}{item_issue}"
+                f"{loc} — {item.normalized_text}{item_issue}"
             )
         yield ""
 
@@ -474,7 +485,10 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(
         prog="backlog_scanner",
-        description="Scan a codebase for TODO/FIXME/HACK/XXX comments and generate a prioritized backlog.",
+        description=(
+            "Scan a codebase for TODO/FIXME/HACK/XXX comments"
+            " and generate a prioritized backlog."
+        ),
     )
     parser.add_argument(
         "--root",
@@ -489,7 +503,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         metavar="PATTERN",
-        help="File patterns to include (default: **/*). Can be specified multiple times.",
+        help=(
+            "File patterns to include (default: **/*). "
+            "Can be specified multiple times."
+        ),
     )
     parser.add_argument(
         "--exclude",
@@ -523,7 +540,9 @@ def resolve_args(args: argparse.Namespace) -> tuple[Path, list[str], list[str]]:
         raise ConfigError(f"root path is not a directory: {root}")
 
     includes: list[str] = args.includes if args.includes is not None else ["**/*"]
-    excludes: list[str] = args.excludes if args.excludes is not None else list(DEFAULT_EXCLUDES)
+    excludes: list[str] = (
+        args.excludes if args.excludes is not None else list(DEFAULT_EXCLUDES)
+    )
 
     return root, includes, excludes
 
@@ -543,7 +562,8 @@ def verify_completeness(
         print(f"✓ Verified: captured {original_count} items")
         return 0
     print(
-        f"✗ Verification failed: original scan={original_count}, re-scan={verification.total}",
+        f"✗ Verification failed: original scan={original_count},"
+        f" re-scan={verification.total}",
         file=sys.stderr,
     )
     return 1

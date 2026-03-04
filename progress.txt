@@ -221,6 +221,20 @@ Started: Tue, Mar  3, 2026 10:34:39 PM
   - `_detect_java_module` no longer raises `FileReadError`; it returns `None` on OSError — callers no longer need try/except around it
 ---
 
+## 2026-03-04 - US-009 (ralph/refactor-python-patterns branch)
+- Fixed import sorting: ruff auto-fixed I001 (split `import X` and `from X import Y` blocks)
+- Added docstring to `ScanResult.total` property (was missing)
+- Fixed all E501 (line > 88 chars): shortened docstrings, broke long f-strings, wrapped long expressions
+- All criteria confirmed: no mutable defaults, `is None`/`is not None` used throughout, `isinstance()` used for all type checks
+- Files changed: `backlog_scanner.py`, `prd.json` (US-009 passes=true), `progress.txt`
+- ruff (E, F, I, N, W rules) and mypy --strict pass with zero issues
+- **Learnings for future iterations:**
+  - `ruff check --select I --fix` auto-fixes import sorting in one step
+  - E501 docstrings: simply shorten the text or use multiline `"""\nlong text\n"""`
+  - Long f-strings inside yields: extract to a named variable first, then yield it
+  - Long argparse `description=` and `help=`: wrap in parentheses with string concatenation
+---
+
 ## 2026-03-03 - US-008 (ralph/refactor-python-patterns branch)
 - Created `pyproject.toml` with full tooling configuration
 - Project metadata: name=todo-backlog-scanner, version=0.1.0, requires-python>=3.13
