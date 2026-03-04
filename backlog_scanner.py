@@ -57,6 +57,7 @@ class ScanResult:
     items: list[TodoItem] = field(default_factory=list)
     files_scanned: int = 0
     files_skipped: int = 0
+    duplicates_removed: int = 0
 
     @property
     def total(self) -> int:
@@ -69,6 +70,21 @@ class ScanResult:
             key = item.marker.upper()
             result.setdefault(key, []).append(item)
         return result
+
+    def deduplicate(self) -> None:
+        """Deduplicate items by normalized text, keeping first occurrence by file path (alphabetical)."""
+        # Sort by file path so the first alphabetical occurrence is kept
+        self.items.sort(key=lambda item: str(item.file_path))
+        seen: set[tuple[str, str]] = set()
+        unique: list[TodoItem] = []
+        for item in self.items:
+            key = (item.marker.upper(), item.normalized_text)
+            if key not in seen:
+                seen.add(key)
+                unique.append(item)
+            else:
+                self.duplicates_removed += 1
+        self.items = unique
 
 
 def is_excluded(path: Path, root: Path, excludes: list[str]) -> bool:
@@ -164,15 +180,17 @@ def scan_repository(
         else:
             result.files_skipped += 1
 
+    result.deduplicate()
     return result
 
 
 def print_summary(result: ScanResult, root: Path) -> None:
     """Print a summary of scan results to stdout."""
     print(f"\nScan complete: {root}")
-    print(f"  Files scanned : {result.files_scanned}")
-    print(f"  Files skipped : {result.files_skipped}")
-    print(f"  Total items   : {result.total}")
+    print(f"  Files scanned      : {result.files_scanned}")
+    print(f"  Files skipped      : {result.files_skipped}")
+    print(f"  Duplicates removed : {result.duplicates_removed}")
+    print(f"  Total items        : {result.total}")
 
     by_marker = result.by_marker()
     if by_marker:
