@@ -1,0 +1,99 @@
+{
+  "project": "TODO Backlog Scanner",
+  "branchName": "ralph/todo-backlog-scanner",
+  "description": "Python CLI tool that scans codebases for TODO/FIXME/HACK/XXX comments and generates a prioritized backlog",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Scan repository for TODO markers",
+      "description": "As a developer, I want to scan my entire repository for TODO/FIXME/HACK/XXX comments so I can see all technical debt in one place.",
+      "acceptanceCriteria": [
+        "CLI accepts --root flag for repo path (default: current directory)",
+        "CLI accepts --include flag for file patterns (default: **/*)",
+        "CLI accepts --exclude flag with defaults: node_modules, target, dist, .git, build, .next",
+        "Detects TODO:, FIXME:, HACK:, XXX: markers (case-insensitive)",
+        "Extracts file path, line number, and comment text for each marker",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Deduplicate exact matches",
+      "description": "As a developer, I want duplicate TODO comments to appear only once so the backlog isn't cluttered with repetition.",
+      "acceptanceCriteria": [
+        "Exact text matches are deduplicated (whitespace-normalized)",
+        "First occurrence by file path alphabetically is kept",
+        "Duplicate count is tracked and shown in summary",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Cluster by module/package structure",
+      "description": "As a team lead, I want TODOs grouped by module so I can assign work by area of responsibility.",
+      "acceptanceCriteria": [
+        "Python: detect packages via __init__.py or directory structure",
+        "JavaScript/TypeScript: detect modules via package.json or directory structure",
+        "Java: detect packages via package declarations",
+        "Fallback: group by top-level directory if no package structure detected",
+        "Each cluster shows count of items",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Calculate priority scores",
+      "description": "As a developer, I want each TODO to have a priority score so I know what to tackle first.",
+      "acceptanceCriteria": [
+        "Impact score (1-5): SECURITY|DATA LOSS|P0|CRITICAL=5, BUG|FIXME=4, TODO=3, REFACTOR|CLEANUP=2, NICE TO HAVE=1",
+        "Effort score (1-3): <50 chars=1, 50-150=2, >150=3",
+        "Confidence boost (+1, max 5) if comment includes issue ID pattern (#123 or ABC-123)",
+        "Priority = impact + confidence - effort (clamped 1-10)",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Generate BACKLOG.md",
+      "description": "As a team lead, I want a formatted BACKLOG.md file so I can review it in sprint planning meetings.",
+      "acceptanceCriteria": [
+        "Summary section: total count, breakdown by marker type (TODO/FIXME/HACK/XXX)",
+        "Top 10 highest priority items section with full details",
+        "By module section: grouped clusters with item counts",
+        "Each item shows: priority score, tag, file:line, text, optional owner/date/issue ID",
+        "File written to repo root as BACKLOG.md",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Verify scan completeness",
+      "description": "As a developer, I want confirmation that all TODOs were captured so I can trust the backlog.",
+      "acceptanceCriteria": [
+        "After generating BACKLOG.md, re-scan repository",
+        "Compare item counts: original scan vs verification scan",
+        "Print confirmation message: '✓ Verified: captured X items'",
+        "Exit with error if counts don't match",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

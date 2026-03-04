@@ -1,0 +1,22 @@
+{
+  "enabled": true,
+  "name": "Update Docs on Source Change",
+  "description": "Monitors source files and prompts the agent to update documentation in README or docs folder when changes are detected",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "*.sh",
+      "*.md",
+      "*.py",
+      "*.ts",
+      "*.tsx",
+      "*.js",
+      "*.jsx"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A source file has been modified. Please review the changes and update the relevant documentation in the README.md or docs folder to reflect any new features, changes in behavior, or updated usage instructions."
+  }
+}
